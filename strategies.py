@@ -257,7 +257,7 @@ class WeeklyTradingStrategy:
 
         if any(df is None or df.empty for df in self.data.values()):
             print("❌ ไม่สามารถดึงข้อมูลได้")
-            return None
+            return False
 
         for timeframe in self.data:
             self.data[timeframe] = self.calculate_indicators(self.data[timeframe])
@@ -586,7 +586,7 @@ class WeeklyTradingStrategy:
         """แสดงคำแนะนำ Weekly Trading แบบปรับปรุง"""
 
         if not self.analyze_multi_timeframe():
-            return
+            return False
 
         signals, reasons = self.get_weekly_signal()
 
@@ -704,6 +704,8 @@ class WeeklyTradingStrategy:
         print("💰 ใช้ Leverage 5-10x สำหรับ Swing Trade")
         print("🎯 ตั้ง SL/TP แล้วปล่อยให้ระบบทำงาน")
         print("=" * 100)
+
+        return True
 
     def _print_trade_setup(self, position_mgmt, signal_type, balance, current_price):
         """พิมพ์ Trade Setup"""
@@ -938,7 +940,7 @@ class MonthlyTradingStrategy:
 
         if any(df is None or df.empty for df in self.data.values()):
             print("❌ ไม่สามารถดึงข้อมูลได้")
-            return None
+            return False
 
         for timeframe in self.data:
             self.data[timeframe] = self.calculate_indicators(self.data[timeframe])
@@ -1147,7 +1149,7 @@ class MonthlyTradingStrategy:
         """แสดงคำแนะนำ Monthly Trading"""
 
         if not self.analyze_multi_timeframe():
-            return
+            return False
 
         signals, reasons = self.get_monthly_signal()
 
@@ -1252,6 +1254,8 @@ class MonthlyTradingStrategy:
         print("💰 ใช้ Leverage ต่ำ (2-5x) เพื่อความปลอดภัยในระยะยาว")
         print("🎯 Patience is Key - ให้เวลากับ Position ทำงาน")
         print("=" * 100)
+
+        return True
 
     def _print_trade_setup(self, position_mgmt, signal_type, balance, current_price):
         """พิมพ์ Trade Setup"""

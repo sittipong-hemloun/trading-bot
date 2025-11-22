@@ -36,7 +36,7 @@ def print_usage():
 
 
 def run_weekly_analysis(symbol="BTCUSDT", balance=10000):
-    """รันการวิเคราะห์ Weekly และ return output"""
+    """รันการวิเคราะห์ Weekly และ return output และ status"""
     print("\n" + "━" * 100)
     print("                         📅 WEEKLY ANALYSIS")
     print("━" * 100 + "\n")
@@ -46,16 +46,16 @@ def run_weekly_analysis(symbol="BTCUSDT", balance=10000):
     # Capture output
     old_stdout = sys.stdout
     sys.stdout = buffer = io.StringIO()
-    weekly_trader.get_weekly_recommendation(balance=balance)
+    success = weekly_trader.get_weekly_recommendation(balance=balance)
     weekly_output = buffer.getvalue()
     sys.stdout = old_stdout
 
     print(weekly_output)
-    return weekly_output
+    return success, weekly_output
 
 
 def run_monthly_analysis(symbol="BTCUSDT", balance=10000):
-    """รันการวิเคราะห์ Monthly และ return output"""
+    """รันการวิเคราะห์ Monthly และ return output และ status"""
     print("\n" + "━" * 100)
     print("                         🌙 MONTHLY ANALYSIS")
     print("━" * 100 + "\n")
@@ -65,12 +65,12 @@ def run_monthly_analysis(symbol="BTCUSDT", balance=10000):
     # Capture output
     old_stdout = sys.stdout
     sys.stdout = buffer = io.StringIO()
-    monthly_trader.get_monthly_recommendation(balance=balance)
+    success = monthly_trader.get_monthly_recommendation(balance=balance)
     monthly_output = buffer.getvalue()
     sys.stdout = old_stdout
 
     print(monthly_output)
-    return monthly_output
+    return success, monthly_output
 
 
 def get_email_config():
@@ -147,26 +147,28 @@ def main():
     # Track outputs for separate emails
     weekly_output = None
     monthly_output = None
+    weekly_success = False
+    monthly_success = False
 
     # Run analyses
     if mode in ["weekly", "w", "both", "all"]:
-        weekly_output = run_weekly_analysis(symbol, balance)
+        weekly_success, weekly_output = run_weekly_analysis(symbol, balance)
 
     if mode in ["monthly", "m", "both", "all"]:
-        monthly_output = run_monthly_analysis(symbol, balance)
+        monthly_success, monthly_output = run_monthly_analysis(symbol, balance)
 
     # Send separate emails
     if send_email:
         if email_configured:
             # ส่งอีเมลแยก 2 ฉบับ
-            if weekly_output:
+            if weekly_success and weekly_output:
                 print("\n📧 Sending WEEKLY analysis email...")
                 send_email_notification(
                     weekly_output, "weekly",
                     email_sender, email_password, email_recipient
                 )
 
-            if monthly_output:
+            if monthly_success and monthly_output:
                 print("\n📧 Sending MONTHLY analysis email...")
                 send_email_notification(
                     monthly_output, "monthly",
