@@ -9,6 +9,111 @@ import pandas_ta as ta
 from datetime import timedelta
 
 
+def fetch_from_coingecko(symbol, days=100):
+    """Fetch OHLC data from CoinGecko (no geo-restrictions)"""
+    # Map symbol to CoinGecko ID
+    symbol_map = {
+        "BTCUSDT": "bitcoin",
+        "ETHUSDT": "ethereum",
+        "BNBUSDT": "binancecoin",
+        "SOLUSDT": "solana",
+        "XRPUSDT": "ripple",
+        "ADAUSDT": "cardano",
+        "DOGEUSDT": "dogecoin",
+    }
+
+    coin_id = symbol_map.get(symbol.upper(), "bitcoin")
+    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/ohlc"
+    params = {"vs_currency": "usd", "days": days}
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json",
+    }
+
+    try:
+        response = requests.get(url, params=params, headers=headers, timeout=30)
+        if response.status_code != 200:
+            print(f"   CoinGecko: HTTP {response.status_code}")
+            return None
+
+        data = response.json()
+        if not data:
+            print("   CoinGecko: No data returned")
+            return None
+
+        # CoinGecko returns [timestamp, open, high, low, close]
+        df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close"])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+
+        # Add volume (CoinGecko OHLC doesn't include volume, so estimate)
+        df["volume"] = 0.0
+
+        for col in ["open", "high", "low", "close"]:
+            df[col] = df[col].astype(float)
+
+        return df
+
+    except Exception as e:
+        print(f"   CoinGecko error: {type(e).__name__}: {e}")
+        return None
+
+
+def fetch_from_binance(symbol, interval, limit=100):
+    """Fetch data from Binance with multiple endpoint fallback"""
+    api_endpoints = [
+        "https://api.binance.com/api/v3/klines",
+        "https://api1.binance.com/api/v3/klines",
+        "https://api2.binance.com/api/v3/klines",
+        "https://api3.binance.com/api/v3/klines",
+        "https://api4.binance.com/api/v3/klines",
+    ]
+
+    params = {"symbol": symbol, "interval": interval, "limit": limit}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json",
+    }
+
+    for url in api_endpoints:
+        try:
+            response = requests.get(url, params=params, headers=headers, timeout=30)
+
+            if response.status_code == 451:
+                # Geo-blocked, skip all Binance endpoints
+                return None
+
+            if response.status_code != 200:
+                continue
+
+            data = response.json()
+            if isinstance(data, dict) and "code" in data:
+                continue
+
+            if not data:
+                continue
+
+            df = pd.DataFrame(
+                data,
+                columns=[
+                    "timestamp", "open", "high", "low", "close", "volume",
+                    "close_time", "quote_volume", "trades",
+                    "taker_buy_base", "taker_buy_quote", "ignore",
+                ],
+            )
+
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+            for col in ["open", "high", "low", "close", "volume"]:
+                df[col] = df[col].astype(float)
+
+            return df
+
+        except Exception:
+            continue
+
+    return None
+
+
 class WeeklyTradingStrategy:
     """Strategy สำหรับ Trade รอบละ 1 สัปดาห์"""
 
@@ -19,87 +124,17 @@ class WeeklyTradingStrategy:
         self.data = {}
 
     def fetch_data(self, timeframe, limit=100):
-        """ดึงข้อมูลจาก Binance with fallback APIs"""
-        # Try multiple Binance API endpoints (some may be blocked in certain regions)
-        api_endpoints = [
-            "https://api.binance.com/api/v3/klines",
-            "https://api1.binance.com/api/v3/klines",
-            "https://api2.binance.com/api/v3/klines",
-            "https://api3.binance.com/api/v3/klines",
-            "https://api4.binance.com/api/v3/klines",
-        ]
+        """ดึงข้อมูลจาก Binance with CoinGecko fallback"""
+        # Try Binance first
+        df = fetch_from_binance(self.symbol, timeframe, limit)
+        if df is not None:
+            return df
 
-        params = {"symbol": self.symbol, "interval": timeframe, "limit": limit}
-
-        # Headers to avoid being blocked
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json",
-        }
-
-        last_error = None
-        for url in api_endpoints:
-            try:
-                response = requests.get(url, params=params, headers=headers, timeout=30)
-
-                # Check for HTTP errors
-                if response.status_code != 200:
-                    print(f"   {url}: HTTP {response.status_code}")
-                    last_error = f"HTTP {response.status_code}"
-                    continue
-
-                data = response.json()
-
-                # Check if response is an error
-                if isinstance(data, dict) and "code" in data:
-                    print(f"   {url}: API Error {data.get('msg', 'Unknown')}")
-                    last_error = data.get("msg", "API Error")
-                    continue
-
-                if not data or len(data) == 0:
-                    print(f"   {url}: No data returned")
-                    last_error = "No data"
-                    continue
-
-                df = pd.DataFrame(
-                    data,
-                    columns=[
-                        "timestamp",
-                        "open",
-                        "high",
-                        "low",
-                        "close",
-                        "volume",
-                        "close_time",
-                        "quote_volume",
-                        "trades",
-                        "taker_buy_base",
-                        "taker_buy_quote",
-                        "ignore",
-                    ],
-                )
-
-                df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-                for col in ["open", "high", "low", "close", "volume"]:
-                    df[col] = df[col].astype(float)
-
-                return df
-
-            except requests.exceptions.Timeout:
-                print(f"   {url}: Timeout")
-                last_error = "Timeout"
-                continue
-            except requests.exceptions.ConnectionError as e:
-                print(f"   {url}: Connection error")
-                last_error = str(e)
-                continue
-            except Exception as e:
-                print(f"   {url}: {type(e).__name__}: {e}")
-                last_error = str(e)
-                continue
-
-        print(f"   All API endpoints failed. Last error: {last_error}")
-        return None
+        # Fallback to CoinGecko if Binance is blocked (HTTP 451)
+        print("   Binance blocked, trying CoinGecko...")
+        days = 90 if timeframe in ["1w", "1M"] else 30
+        df = fetch_from_coingecko(self.symbol, days=days)
+        return df
 
     def calculate_indicators(self, df):
         """คำนวณตัวชี้วัดแบบครบถ้วน"""
@@ -832,78 +867,17 @@ class MonthlyTradingStrategy:
         self.data = {}
 
     def fetch_data(self, timeframe, limit=100):
-        """ดึงข้อมูลจาก Binance with fallback APIs"""
-        # Try multiple Binance API endpoints (some may be blocked in certain regions)
-        api_endpoints = [
-            "https://api.binance.com/api/v3/klines",
-            "https://api1.binance.com/api/v3/klines",
-            "https://api2.binance.com/api/v3/klines",
-            "https://api3.binance.com/api/v3/klines",
-            "https://api4.binance.com/api/v3/klines",
-        ]
+        """ดึงข้อมูลจาก Binance with CoinGecko fallback"""
+        # Try Binance first
+        df = fetch_from_binance(self.symbol, timeframe, limit)
+        if df is not None:
+            return df
 
-        params = {"symbol": self.symbol, "interval": timeframe, "limit": limit}
-
-        # Headers to avoid being blocked
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json",
-        }
-
-        last_error = None
-        for url in api_endpoints:
-            try:
-                response = requests.get(url, params=params, headers=headers, timeout=30)
-
-                # Check for HTTP errors
-                if response.status_code != 200:
-                    print(f"   {url}: HTTP {response.status_code}")
-                    last_error = f"HTTP {response.status_code}"
-                    continue
-
-                data = response.json()
-
-                # Check if response is an error
-                if isinstance(data, dict) and "code" in data:
-                    print(f"   {url}: API Error {data.get('msg', 'Unknown')}")
-                    last_error = data.get("msg", "API Error")
-                    continue
-
-                if not data or len(data) == 0:
-                    print(f"   {url}: No data returned")
-                    last_error = "No data"
-                    continue
-
-                df = pd.DataFrame(
-                    data,
-                    columns=[
-                        "timestamp", "open", "high", "low", "close", "volume",
-                        "close_time", "quote_volume", "trades",
-                        "taker_buy_base", "taker_buy_quote", "ignore",
-                    ],
-                )
-
-                df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-                for col in ["open", "high", "low", "close", "volume"]:
-                    df[col] = df[col].astype(float)
-
-                return df
-
-            except requests.exceptions.Timeout:
-                print(f"   {url}: Timeout")
-                last_error = "Timeout"
-                continue
-            except requests.exceptions.ConnectionError as e:
-                print(f"   {url}: Connection error")
-                last_error = str(e)
-                continue
-            except Exception as e:
-                print(f"   {url}: {type(e).__name__}: {e}")
-                last_error = str(e)
-                continue
-
-        print(f"   All API endpoints failed. Last error: {last_error}")
-        return None
+        # Fallback to CoinGecko if Binance is blocked (HTTP 451)
+        print("   Binance blocked, trying CoinGecko...")
+        days = 180 if timeframe == "1M" else 90
+        df = fetch_from_coingecko(self.symbol, days=days)
+        return df
 
     def calculate_indicators(self, df):
         """คำนวณตัวชี้วัดแบบครบถ้วน"""
