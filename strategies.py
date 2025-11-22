@@ -10,7 +10,7 @@ from datetime import timedelta
 
 
 def fetch_from_coingecko(symbol, days=100):
-    """Fetch OHLC data from CoinGecko (no geo-restrictions)"""
+    """Fetch OHLC data from CoinGecko market_chart (no geo-restrictions)"""
     # Map symbol to CoinGecko ID
     symbol_map = {
         "BTCUSDT": "bitcoin",
@@ -23,8 +23,10 @@ def fetch_from_coingecko(symbol, days=100):
     }
 
     coin_id = symbol_map.get(symbol.upper(), "bitcoin")
-    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/ohlc"
-    params = {"vs_currency": "usd", "days": days}
+
+    # Use market_chart endpoint for more data points
+    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
+    params = {"vs_currency": "usd", "days": days, "interval": "daily"}
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -38,20 +40,39 @@ def fetch_from_coingecko(symbol, days=100):
             return None
 
         data = response.json()
-        if not data:
+        if not data or "prices" not in data:
             print("   CoinGecko: No data returned")
             return None
 
-        # CoinGecko returns [timestamp, open, high, low, close]
-        df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close"])
+        # market_chart returns prices, market_caps, total_volumes
+        prices = data.get("prices", [])
+        volumes = data.get("total_volumes", [])
+
+        if len(prices) < 30:
+            print(f"   CoinGecko: Insufficient data ({len(prices)} points)")
+            return None
+
+        # Create DataFrame from prices
+        df = pd.DataFrame(prices, columns=["timestamp", "close"])
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+        df["close"] = df["close"].astype(float)
 
-        # Add volume (CoinGecko OHLC doesn't include volume, so estimate)
-        df["volume"] = 0.0
+        # Add volume
+        if volumes and len(volumes) == len(prices):
+            df["volume"] = [v[1] for v in volumes]
+        else:
+            df["volume"] = 0.0
 
-        for col in ["open", "high", "low", "close"]:
+        # Estimate OHLC from close prices (since we only have close)
+        # Use close as base and add small variations for open/high/low
+        df["open"] = df["close"].shift(1).fillna(df["close"])
+        df["high"] = df[["open", "close"]].max(axis=1) * 1.005  # +0.5%
+        df["low"] = df[["open", "close"]].min(axis=1) * 0.995   # -0.5%
+
+        for col in ["open", "high", "low", "close", "volume"]:
             df[col] = df[col].astype(float)
 
+        print(f"   CoinGecko: Got {len(df)} data points")
         return df
 
     except Exception as e:
@@ -137,7 +158,7 @@ class WeeklyTradingStrategy:
         return df
 
     def calculate_indicators(self, df):
-        """คำนวณตัวชี้วัดแบบครบถ้วน"""
+        """คำนวณตัวชี้วัดแบบครบถ้วน (with safety checks)"""
 
         # === MOVING AVERAGES ===
         df["EMA_9"] = ta.ema(df["close"], length=9)
@@ -149,52 +170,83 @@ class WeeklyTradingStrategy:
         # === RSI ===
         df["RSI"] = ta.rsi(df["close"], length=14)
 
-        # === MACD ===
+        # === MACD (with safety check) ===
         macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
-        df["MACD"] = macd["MACD_12_26_9"]
-        df["MACD_signal"] = macd["MACDs_12_26_9"]
-        df["MACD_histogram"] = macd["MACDh_12_26_9"]
+        if macd is not None and not macd.empty:
+            df["MACD"] = macd["MACD_12_26_9"]
+            df["MACD_signal"] = macd["MACDs_12_26_9"]
+            df["MACD_histogram"] = macd["MACDh_12_26_9"]
+        else:
+            df["MACD"] = 0.0
+            df["MACD_signal"] = 0.0
+            df["MACD_histogram"] = 0.0
 
-        # === Stochastic RSI ===
+        # === Stochastic RSI (with safety check) ===
         stochrsi = ta.stochrsi(df["close"], length=14, rsi_length=14, k=3, d=3)
-        df["STOCHRSI_K"] = stochrsi["STOCHRSIk_14_14_3_3"]
-        df["STOCHRSI_D"] = stochrsi["STOCHRSId_14_14_3_3"]
+        if stochrsi is not None and not stochrsi.empty:
+            df["STOCHRSI_K"] = stochrsi["STOCHRSIk_14_14_3_3"]
+            df["STOCHRSI_D"] = stochrsi["STOCHRSId_14_14_3_3"]
+        else:
+            df["STOCHRSI_K"] = 50.0
+            df["STOCHRSI_D"] = 50.0
 
-        # === Stochastic ===
+        # === Stochastic (with safety check) ===
         stoch = ta.stoch(df["high"], df["low"], df["close"], k=14, d=3)
-        df["STOCH_K"] = stoch["STOCHk_14_3_3"]
-        df["STOCH_D"] = stoch["STOCHd_14_3_3"]
+        if stoch is not None and not stoch.empty:
+            df["STOCH_K"] = stoch["STOCHk_14_3_3"]
+            df["STOCH_D"] = stoch["STOCHd_14_3_3"]
+        else:
+            df["STOCH_K"] = 50.0
+            df["STOCH_D"] = 50.0
 
-        # === Bollinger Bands ===
+        # === Bollinger Bands (with safety check) ===
         bbands = ta.bbands(df["close"], length=20, std=2.0)  # type: ignore[arg-type]
-        df["BB_upper"] = bbands["BBU_20_2.0_2.0"]
-        df["BB_middle"] = bbands["BBM_20_2.0_2.0"]
-        df["BB_lower"] = bbands["BBL_20_2.0_2.0"]
-        df["BB_width"] = (df["BB_upper"] - df["BB_lower"]) / df["BB_middle"] * 100
-        df["BB_percent"] = (df["close"] - df["BB_lower"]) / (
-            df["BB_upper"] - df["BB_lower"]
-        )
+        if bbands is not None and not bbands.empty:
+            df["BB_upper"] = bbands["BBU_20_2.0_2.0"]
+            df["BB_middle"] = bbands["BBM_20_2.0_2.0"]
+            df["BB_lower"] = bbands["BBL_20_2.0_2.0"]
+            df["BB_width"] = (df["BB_upper"] - df["BB_lower"]) / df["BB_middle"] * 100
+            df["BB_percent"] = (df["close"] - df["BB_lower"]) / (
+                df["BB_upper"] - df["BB_lower"]
+            )
+        else:
+            df["BB_upper"] = df["close"] * 1.02
+            df["BB_middle"] = df["close"]
+            df["BB_lower"] = df["close"] * 0.98
+            df["BB_width"] = 4.0
+            df["BB_percent"] = 0.5
 
-        # === ADX (Trend Strength) ===
+        # === ADX (Trend Strength) (with safety check) ===
         adx = ta.adx(df["high"], df["low"], df["close"], length=14)
-        df["ADX"] = adx["ADX_14"]
-        df["DI_plus"] = adx["DMP_14"]
-        df["DI_minus"] = adx["DMN_14"]
+        if adx is not None and not adx.empty:
+            df["ADX"] = adx["ADX_14"]
+            df["DI_plus"] = adx["DMP_14"]
+            df["DI_minus"] = adx["DMN_14"]
+        else:
+            df["ADX"] = 25.0
+            df["DI_plus"] = 25.0
+            df["DI_minus"] = 25.0
 
         # === ATR ===
         df["ATR"] = ta.atr(df["high"], df["low"], df["close"], length=14)
+        if df["ATR"].isna().all():
+            df["ATR"] = df["close"] * 0.02  # Fallback: 2% of price
         df["ATR_percent"] = df["ATR"] / df["close"] * 100
 
         # === Volume Analysis ===
         df["Volume_MA"] = df["volume"].rolling(window=20).mean()
-        df["Volume_Ratio"] = df["volume"] / df["Volume_MA"]
+        df["Volume_Ratio"] = df["volume"] / df["Volume_MA"].replace(0, 1)
 
         # === OBV (On-Balance Volume) ===
         df["OBV"] = ta.obv(df["close"], df["volume"])
+        if df["OBV"].isna().all():
+            df["OBV"] = 0.0
         df["OBV_EMA"] = ta.ema(df["OBV"], length=21)
 
         # === MFI (Money Flow Index) ===
         df["MFI"] = ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=14)
+        if df["MFI"].isna().all():
+            df["MFI"] = 50.0
 
         # === CCI (Commodity Channel Index) ===
         # Manual calculation because pandas_ta CCI has issues with high-priced assets
@@ -880,7 +932,7 @@ class MonthlyTradingStrategy:
         return df
 
     def calculate_indicators(self, df):
-        """คำนวณตัวชี้วัดแบบครบถ้วน"""
+        """คำนวณตัวชี้วัดแบบครบถ้วน (with safety checks)"""
 
         # === MOVING AVERAGES ===
         df["EMA_12"] = ta.ema(df["close"], length=12)
@@ -892,53 +944,86 @@ class MonthlyTradingStrategy:
         # === RSI ===
         df["RSI"] = ta.rsi(df["close"], length=14)
 
-        # === MACD ===
+        # === MACD (with safety check) ===
         macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
-        df["MACD"] = macd["MACD_12_26_9"]
-        df["MACD_signal"] = macd["MACDs_12_26_9"]
-        df["MACD_histogram"] = macd["MACDh_12_26_9"]
+        if macd is not None and not macd.empty:
+            df["MACD"] = macd["MACD_12_26_9"]
+            df["MACD_signal"] = macd["MACDs_12_26_9"]
+            df["MACD_histogram"] = macd["MACDh_12_26_9"]
+        else:
+            df["MACD"] = 0.0
+            df["MACD_signal"] = 0.0
+            df["MACD_histogram"] = 0.0
 
-        # === Stochastic RSI ===
+        # === Stochastic RSI (with safety check) ===
         stochrsi = ta.stochrsi(df["close"], length=14, rsi_length=14, k=3, d=3)
-        df["STOCHRSI_K"] = stochrsi["STOCHRSIk_14_14_3_3"]
-        df["STOCHRSI_D"] = stochrsi["STOCHRSId_14_14_3_3"]
+        if stochrsi is not None and not stochrsi.empty:
+            df["STOCHRSI_K"] = stochrsi["STOCHRSIk_14_14_3_3"]
+            df["STOCHRSI_D"] = stochrsi["STOCHRSId_14_14_3_3"]
+        else:
+            df["STOCHRSI_K"] = 50.0
+            df["STOCHRSI_D"] = 50.0
 
-        # === Stochastic ===
+        # === Stochastic (with safety check) ===
         stoch = ta.stoch(df["high"], df["low"], df["close"], k=14, d=3)
-        df["STOCH_K"] = stoch["STOCHk_14_3_3"]
-        df["STOCH_D"] = stoch["STOCHd_14_3_3"]
+        if stoch is not None and not stoch.empty:
+            df["STOCH_K"] = stoch["STOCHk_14_3_3"]
+            df["STOCH_D"] = stoch["STOCHd_14_3_3"]
+        else:
+            df["STOCH_K"] = 50.0
+            df["STOCH_D"] = 50.0
 
-        # === Bollinger Bands ===
+        # === Bollinger Bands (with safety check) ===
         bbands = ta.bbands(df["close"], length=20, std=2.0)  # type: ignore[arg-type]
-        df["BB_upper"] = bbands["BBU_20_2.0_2.0"]
-        df["BB_middle"] = bbands["BBM_20_2.0_2.0"]
-        df["BB_lower"] = bbands["BBL_20_2.0_2.0"]
+        if bbands is not None and not bbands.empty:
+            df["BB_upper"] = bbands["BBU_20_2.0_2.0"]
+            df["BB_middle"] = bbands["BBM_20_2.0_2.0"]
+            df["BB_lower"] = bbands["BBL_20_2.0_2.0"]
+        else:
+            df["BB_upper"] = df["close"] * 1.02
+            df["BB_middle"] = df["close"]
+            df["BB_lower"] = df["close"] * 0.98
 
-        # === ADX ===
+        # === ADX (with safety check) ===
         adx = ta.adx(df["high"], df["low"], df["close"], length=14)
-        df["ADX"] = adx["ADX_14"]
-        df["DI_plus"] = adx["DMP_14"]
-        df["DI_minus"] = adx["DMN_14"]
+        if adx is not None and not adx.empty:
+            df["ADX"] = adx["ADX_14"]
+            df["DI_plus"] = adx["DMP_14"]
+            df["DI_minus"] = adx["DMN_14"]
+        else:
+            df["ADX"] = 25.0
+            df["DI_plus"] = 25.0
+            df["DI_minus"] = 25.0
 
         # === ATR ===
         df["ATR"] = ta.atr(df["high"], df["low"], df["close"], length=14)
+        if df["ATR"].isna().all():
+            df["ATR"] = df["close"] * 0.02
         df["ATR_percent"] = df["ATR"] / df["close"] * 100
 
         # === Volume ===
         df["Volume_MA"] = df["volume"].rolling(window=20).mean()
-        df["Volume_Ratio"] = df["volume"] / df["Volume_MA"]
+        df["Volume_Ratio"] = df["volume"] / df["Volume_MA"].replace(0, 1)
 
         # === OBV ===
         df["OBV"] = ta.obv(df["close"], df["volume"])
+        if df["OBV"].isna().all():
+            df["OBV"] = 0.0
         df["OBV_EMA"] = ta.ema(df["OBV"], length=21)
 
         # === MFI ===
         df["MFI"] = ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=14)
+        if df["MFI"].isna().all():
+            df["MFI"] = 50.0
 
-        # === Supertrend ===
+        # === Supertrend (with safety check) ===
         supertrend = ta.supertrend(df["high"], df["low"], df["close"], length=10, multiplier=3.0)
-        df["SUPERTREND"] = supertrend["SUPERT_10_3.0"]
-        df["SUPERTREND_DIR"] = supertrend["SUPERTd_10_3.0"]
+        if supertrend is not None and not supertrend.empty:
+            df["SUPERTREND"] = supertrend["SUPERT_10_3.0"]
+            df["SUPERTREND_DIR"] = supertrend["SUPERTd_10_3.0"]
+        else:
+            df["SUPERTREND"] = df["close"]
+            df["SUPERTREND_DIR"] = 1
 
         return df
 
