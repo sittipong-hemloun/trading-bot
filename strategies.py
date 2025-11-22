@@ -3,10 +3,15 @@ Trading Strategies Module
 Contains WeeklyTradingStrategy and MonthlyTradingStrategy classes
 """
 
+import warnings
 import requests
 import pandas as pd
 import pandas_ta as ta
 from datetime import timedelta
+
+# Suppress pandas FutureWarning about fillna downcasting
+warnings.filterwarnings("ignore", category=FutureWarning, module="pandas")
+pd.set_option("future.no_silent_downcasting", True)
 
 
 def fetch_from_coingecko(symbol, days=100):
@@ -323,6 +328,38 @@ class WeeklyTradingStrategy:
         mom = ta.mom(df["close"], length=10)
         df["MOM"] = mom if mom is not None else 0.0
 
+        # === Fill NaN values with sensible defaults ===
+        # Use forward fill first, then backward fill for remaining NaNs
+        df = df.ffill().bfill()
+
+        # For any remaining NaN in specific columns, use defaults
+        default_values = {
+            "EMA_9": df["close"],
+            "EMA_21": df["close"],
+            "EMA_50": df["close"],
+            "SMA_50": df["close"],
+            "SMA_200": df["close"],
+            "RSI": 50.0,
+            "MACD": 0.0,
+            "MACD_signal": 0.0,
+            "MACD_histogram": 0.0,
+            "ADX": 25.0,
+            "DI_plus": 25.0,
+            "DI_minus": 25.0,
+            "ATR": df["close"] * 0.02,
+            "ATR_percent": 2.0,
+            "SUPERTREND_DIR": 1,
+            "MFI": 50.0,
+            "CCI": 0.0,
+            "WILLR": -50.0,
+            "ROC": 0.0,
+            "MOM": 0.0,
+        }
+
+        for col, default in default_values.items():
+            if col in df.columns:
+                df[col] = df[col].fillna(default).infer_objects(copy=False)
+
         return df
 
     def calculate_support_resistance(self, df, lookback=20):
@@ -439,39 +476,57 @@ class WeeklyTradingStrategy:
         return None
 
     def get_trend_strength(self, df):
-        """วิเคราะห์ความแข็งแกร่งของ Trend"""
+        """วิเคราะห์ความแข็งแกร่งของ Trend (with NaN handling)"""
         latest = df.iloc[-1]
 
         score = 0
         max_score = 10
 
-        if latest["EMA_9"] > latest["EMA_21"] > latest["EMA_50"]:
+        # Helper to safely get value with default
+        def safe_get(key, default=0.0):
+            val = latest.get(key)
+            if val is None or (isinstance(val, float) and pd.isna(val)):
+                return default
+            return val
+
+        ema_9 = safe_get("EMA_9", latest["close"])
+        ema_21 = safe_get("EMA_21", latest["close"])
+        ema_50 = safe_get("EMA_50", latest["close"])
+        close = safe_get("close")
+        adx = safe_get("ADX", 25)
+        di_plus = safe_get("DI_plus", 25)
+        di_minus = safe_get("DI_minus", 25)
+        macd = safe_get("MACD", 0)
+        macd_signal = safe_get("MACD_signal", 0)
+        macd_hist = safe_get("MACD_histogram", 0)
+
+        if ema_9 > ema_21 > ema_50:
             score += 2
-        elif latest["EMA_9"] < latest["EMA_21"] < latest["EMA_50"]:
+        elif ema_9 < ema_21 < ema_50:
             score -= 2
 
-        if latest["close"] > latest["EMA_9"] > latest["EMA_21"]:
+        if close > ema_9 > ema_21:
             score += 1
-        elif latest["close"] < latest["EMA_9"] < latest["EMA_21"]:
+        elif close < ema_9 < ema_21:
             score -= 1
 
-        if latest["ADX"] > 25:
-            if latest["DI_plus"] > latest["DI_minus"]:
+        if adx > 25:
+            if di_plus > di_minus:
                 score += 2
             else:
                 score -= 2
-        elif latest["ADX"] < 20:
+        elif adx < 20:
             score = score * 0.5
 
-        if pd.notna(latest.get("SUPERTREND_DIR")):
-            if latest["SUPERTREND_DIR"] == 1:
-                score += 1
-            else:
-                score -= 1
-
-        if latest["MACD"] > latest["MACD_signal"] and latest["MACD_histogram"] > 0:
+        supertrend_dir = safe_get("SUPERTREND_DIR", 0)
+        if supertrend_dir == 1:
             score += 1
-        elif latest["MACD"] < latest["MACD_signal"] and latest["MACD_histogram"] < 0:
+        elif supertrend_dir == -1:
+            score -= 1
+
+        if macd > macd_signal and macd_hist > 0:
+            score += 1
+        elif macd < macd_signal and macd_hist < 0:
             score -= 1
 
         return score, max_score
@@ -1047,6 +1102,32 @@ class MonthlyTradingStrategy:
         else:
             df["SUPERTREND"] = df["close"]
             df["SUPERTREND_DIR"] = 1
+
+        # === Fill NaN values with sensible defaults ===
+        df = df.ffill().bfill()
+
+        default_values = {
+            "EMA_12": df["close"],
+            "EMA_26": df["close"],
+            "EMA_50": df["close"],
+            "SMA_50": df["close"],
+            "SMA_200": df["close"],
+            "RSI": 50.0,
+            "MACD": 0.0,
+            "MACD_signal": 0.0,
+            "MACD_histogram": 0.0,
+            "ADX": 25.0,
+            "DI_plus": 25.0,
+            "DI_minus": 25.0,
+            "ATR": df["close"] * 0.02,
+            "ATR_percent": 2.0,
+            "SUPERTREND_DIR": 1,
+            "MFI": 50.0,
+        }
+
+        for col, default in default_values.items():
+            if col in df.columns:
+                df[col] = df[col].fillna(default).infer_objects(copy=False)
 
         return df
 
