@@ -24,9 +24,11 @@ class EmailNotifier:
         """สร้าง HTML email จาก console output"""
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        # Parse และแปลง console output เป็น structured HTML
         html_content = self._parse_and_convert(console_output)
+
+        # กำหนด icon ตาม mode
+        mode_icon = "📅" if mode.lower() == "weekly" else "🌙"
+        mode_text = "Weekly" if mode.lower() == "weekly" else "Monthly"
 
         html = f"""
 <!DOCTYPE html>
@@ -35,14 +37,12 @@ class EmailNotifier:
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
-        * {{
-            box-sizing: border-box;
-        }}
+        * {{ box-sizing: border-box; }}
         body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
             color: #e8e8e8;
-            padding: 4px;
+            padding: 2px;
             margin: 0;
             line-height: 1.6;
         }}
@@ -50,12 +50,10 @@ class EmailNotifier:
             max-width: 700px;
             margin: 0 auto;
             background-color: #1e2a4a;
-            border-radius: 16px;
+            border-radius: 4px;
             overflow: hidden;
             box-shadow: 0 20px 60px rgba(0,0,0,0.4);
         }}
-
-        /* Header */
         .header {{
             background: linear-gradient(135deg, #e94560 0%, #c73e54 100%);
             padding: 4px;
@@ -64,52 +62,38 @@ class EmailNotifier:
         .header h1 {{
             color: #fff;
             margin: 0;
-            font-size: 24px;
+            font-size: 22px;
             font-weight: 700;
-            letter-spacing: 0.5px;
         }}
         .header .subtitle {{
             color: rgba(255,255,255,0.85);
-            font-size: 14px;
+            font-size: 13px;
             margin-top: 8px;
         }}
         .header .mode-badge {{
             display: inline-block;
             background: rgba(255,255,255,0.2);
-            padding: 4px 16px;
+            padding: 6px 20px;
             border-radius: 20px;
-            font-size: 12px;
+            font-size: 14px;
             font-weight: 600;
             margin-top: 12px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
         }}
-
-        /* Main Content */
-        .main-content {{
-            padding: 4px;
-        }}
-
-        /* Section Cards */
+        .main-content {{ padding: 20px; }}
         .section {{
             background: #253557;
             border-radius: 12px;
-            padding: 4px;
+            padding: 6px;
             margin-bottom: 16px;
         }}
         .section-title {{
-            font-size: 16px;
+            font-size: 15px;
             font-weight: 700;
             color: #4dabf7;
-            margin: 0 0 16px 0;
-            padding-bottom: 10px;
+            margin: 0 0 12px 0;
+            padding-bottom: 8px;
             border-bottom: 2px solid #3a4a6b;
-            display: flex;
-            align-items: center;
-            gap: 8px;
         }}
-
-        /* Price Display */
         .price-display {{
             background: linear-gradient(135deg, #2d3a5a 0%, #1e2a4a 100%);
             border-radius: 12px;
@@ -130,8 +114,6 @@ class EmailNotifier:
             color: #ffd700;
             margin-top: 4px;
         }}
-
-        /* Signal Box */
         .signal-box {{
             border-radius: 12px;
             padding: 4px;
@@ -155,50 +137,38 @@ class EmailNotifier:
             font-weight: 700;
             margin-bottom: 8px;
         }}
-        .signal-subtitle {{
-            font-size: 14px;
-            opacity: 0.9;
-        }}
-
-        /* Indicator Grid */
+        .signal-subtitle {{ font-size: 14px; opacity: 0.9; }}
         .indicator-grid {{
             display: grid;
             grid-template-columns: repeat(2, 1fr);
-            gap: 12px;
+            gap: 10px;
         }}
         .indicator-item {{
             background: #1e2a4a;
             border-radius: 8px;
-            padding: 12px;
+            padding: 10px;
             border-left: 3px solid #4dabf7;
         }}
         .indicator-label {{
-            font-size: 11px;
+            font-size: 10px;
             color: #8892b0;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
         }}
         .indicator-value {{
-            font-size: 16px;
+            font-size: 14px;
             font-weight: 600;
-            color: #e8e8e8;
-            margin-top: 4px;
+            margin-top: 2px;
         }}
-
-        /* Signal List */
         .signal-list {{
             margin: 0;
             padding: 0;
             list-style: none;
         }}
         .signal-list li {{
-            padding: 10px 12px;
-            margin-bottom: 8px;
-            border-radius: 8px;
-            font-size: 13px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
+            padding: 8px 10px;
+            margin-bottom: 6px;
+            border-radius: 6px;
+            font-size: 12px;
         }}
         .signal-list .long {{
             background: rgba(52, 232, 158, 0.15);
@@ -210,13 +180,6 @@ class EmailNotifier:
             border-left: 3px solid #e94560;
             color: #e94560;
         }}
-        .signal-list .neutral {{
-            background: rgba(255, 215, 0, 0.15);
-            border-left: 3px solid #ffd700;
-            color: #ffd700;
-        }}
-
-        /* Trade Setup */
         .trade-setup {{
             background: #1e2a4a;
             border-radius: 8px;
@@ -225,43 +188,25 @@ class EmailNotifier:
         .trade-row {{
             display: flex;
             justify-content: space-between;
-            padding: 12px 16px;
+            padding: 10px 14px;
             border-bottom: 1px solid #3a4a6b;
         }}
-        .trade-row:last-child {{
-            border-bottom: none;
-        }}
-        .trade-row.entry {{
-            background: #2a3a5a;
-        }}
-        .trade-row.sl {{
-            background: rgba(233, 69, 96, 0.1);
-        }}
-        .trade-row.tp {{
-            background: rgba(52, 232, 158, 0.1);
-        }}
-        .trade-label {{
-            font-size: 13px;
-            color: #8892b0;
-        }}
-        .trade-value {{
-            font-size: 14px;
-            font-weight: 600;
-        }}
+        .trade-row:last-child {{ border-bottom: none; }}
+        .trade-row.entry {{ background: #2a3a5a; }}
+        .trade-row.sl {{ background: rgba(233, 69, 96, 0.1); }}
+        .trade-row.tp {{ background: rgba(52, 232, 158, 0.1); }}
+        .trade-label {{ font-size: 12px; color: #8892b0; }}
+        .trade-value {{ font-size: 13px; font-weight: 600; }}
         .trade-value.green {{ color: #34e89e; }}
         .trade-value.red {{ color: #e94560; }}
         .trade-value.yellow {{ color: #ffd700; }}
-
-        /* Progress Bar */
-        .signal-progress {{
-            margin-top: 16px;
-        }}
         .progress-bar {{
             height: 8px;
             background: #1e2a4a;
             border-radius: 4px;
             overflow: hidden;
             display: flex;
+            margin-top: 12px;
         }}
         .progress-long {{
             background: linear-gradient(90deg, #34e89e, #4ade80);
@@ -274,76 +219,73 @@ class EmailNotifier:
         .progress-labels {{
             display: flex;
             justify-content: space-between;
-            margin-top: 8px;
+            margin-top: 6px;
+            font-size: 11px;
+        }}
+        .level-list {{
+            margin: 0;
+            padding: 0;
+            list-style: none;
+        }}
+        .level-list li {{
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            border-bottom: 1px solid #3a4a6b;
             font-size: 12px;
         }}
-
-        /* Footer */
+        .level-list li:last-child {{ border-bottom: none; }}
         .footer {{
             background: #151d30;
             padding: 4px;
             text-align: center;
         }}
         .footer p {{
-            margin: 0;
-            font-size: 12px;
+            margin: 4px 0;
+            font-size: 11px;
             color: #5a6a8a;
         }}
         .footer .warning {{
             color: #ffd700;
             font-weight: 500;
-            margin-bottom: 8px;
         }}
-
-        /* Raw Content (fallback) */
-        .raw-content {{
-            background: #0d1526;
-            border-radius: 8px;
-            padding: 4px;
-            font-family: 'SF Mono', 'Fira Code', monospace;
-            font-size: 12px;
-            line-height: 1.8;
-            white-space: pre-wrap;
-            overflow-x: auto;
-            color: #a8b2c4;
-        }}
-
-        /* Colors */
         .text-green {{ color: #34e89e; }}
         .text-red {{ color: #e94560; }}
         .text-yellow {{ color: #ffd700; }}
         .text-blue {{ color: #4dabf7; }}
-        .text-muted {{ color: #8892b0; }}
-
-        /* Responsive */
+        .info-grid {{
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+            margin-top: 10px;
+        }}
+        .info-item {{
+            background: #1e2a4a;
+            padding: 8px;
+            border-radius: 6px;
+            text-align: center;
+        }}
+        .info-label {{ font-size: 10px; color: #8892b0; }}
+        .info-value {{ font-size: 13px; font-weight: 600; }}
         @media (max-width: 600px) {{
-            .indicator-grid {{
-                grid-template-columns: 1fr;
-            }}
-            .price-value {{
-                font-size: 24px;
-            }}
-            .header h1 {{
-                font-size: 20px;
-            }}
+            .indicator-grid, .info-grid {{ grid-template-columns: 1fr; }}
+            .price-value {{ font-size: 24px; }}
         }}
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>🔥 Crypto Trading Bot 🔥</h1>
-            <div class="subtitle">Analysis Report • {now}</div>
-            <div class="mode-badge">📊 {mode.upper()} Analysis</div>
+            <h1>🔥 Crypto Trading Bot</h1>
+            <div class="subtitle">{now}</div>
+            <div class="mode-badge">{mode_icon} {mode_text} Analysis</div>
         </div>
-
         <div class="main-content">
 {html_content}
         </div>
-
         <div class="footer">
-            <p class="warning">⚠️ This is an automated analysis. Always do your own research.</p>
-            <p>Generated by Crypto Trading Bot</p>
+            <p class="warning">⚠️ This is automated analysis. Always DYOR.</p>
+            <p>Crypto Trading Bot v2.0</p>
         </div>
     </div>
 </body>
@@ -354,130 +296,75 @@ class EmailNotifier:
     def _parse_and_convert(self, text):
         """Parse console output และแปลงเป็น structured HTML"""
         import html as html_lib
-
-        # Escape HTML characters
         text = html_lib.escape(text)
-
-        # Extract key information using regex
         html_parts = []
 
-        # Find current price
+        # === Extract Data ===
+
+        # Price
         price_match = re.search(r"ราคาปัจจุบัน: \$([0-9,]+\.[0-9]+)", text)
         current_price = price_match.group(1) if price_match else None
 
-        # Find signal percentages
+        # Symbol & Date
+        symbol_match = re.search(r"STRATEGY - (\w+)", text)
+        symbol = symbol_match.group(1) if symbol_match else "BTCUSDT"
+
+        date_match = re.search(r"วันที่: ([0-9-]+ [0-9:]+)", text)
+        date_str = date_match.group(1) if date_match else ""
+
+        # Leverage
+        leverage_match = re.search(r"Leverage: (\d+)x", text)
+        leverage = leverage_match.group(1) if leverage_match else "5"
+
+        # Signal percentages
         long_match = re.search(r"LONG Signals: (\d+) \(([0-9.]+)%\)", text)
         short_match = re.search(r"SHORT Signals: (\d+) \(([0-9.]+)%\)", text)
+        neutral_match = re.search(r"NEUTRAL Signals: (\d+) \(([0-9.]+)%\)", text)
 
+        long_count = int(long_match.group(1)) if long_match else 0
         long_pct = float(long_match.group(2)) if long_match else 0
+        short_count = int(short_match.group(1)) if short_match else 0
         short_pct = float(short_match.group(2)) if short_match else 0
+        neutral_count = int(neutral_match.group(1)) if neutral_match else 0
 
-        # Find recommendation
+        # Recommendation
         recommendation = "WAIT"
-        if "LONG SIGNAL" in text:
-            recommendation = "LONG"
-        elif "SHORT SIGNAL" in text:
-            recommendation = "SHORT"
-
-        # Find trade setup
-        entry_match = re.search(r"Entry: \$([0-9,]+\.[0-9]+)", text)
-        sl_match = re.search(r"Stop Loss: \$([0-9,]+\.[0-9]+)", text)
-        tp1_match = re.search(r"TP1.*?: \$([0-9,]+\.[0-9]+)", text)
-        tp2_match = re.search(r"TP2.*?: \$([0-9,]+\.[0-9]+)", text)
-        tp3_match = re.search(r"TP3.*?: \$([0-9,]+\.[0-9]+)", text)
-
-        # Price Display
-        if current_price:
-            html_parts.append(f"""
-            <div class="price-display">
-                <div class="price-label">Current Price</div>
-                <div class="price-value">${current_price}</div>
-            </div>
-            """)
-
-        # Signal Summary with Progress Bar
-        if long_match and short_match:
-            signal_class = "signal-long" if recommendation == "LONG" else "signal-short" if recommendation == "SHORT" else "signal-wait"
-            signal_icon = "✅" if recommendation == "LONG" else "❌" if recommendation == "SHORT" else "⏸️"
-            signal_text = "LONG SIGNAL" if recommendation == "LONG" else "SHORT SIGNAL" if recommendation == "SHORT" else "WAIT - No Clear Signal"
-
-            html_parts.append(f"""
-            <div class="signal-box {signal_class}">
-                <div class="signal-title">{signal_icon} {signal_text}</div>
-                <div class="signal-subtitle">Confidence: {max(long_pct, short_pct):.1f}%</div>
-                <div class="signal-progress">
-                    <div class="progress-bar">
-                        <div class="progress-long" style="width: {long_pct}%"></div>
-                        <div class="progress-short" style="width: {short_pct}%"></div>
-                    </div>
-                    <div class="progress-labels">
-                        <span class="text-green">🟢 Long {long_pct:.1f}%</span>
-                        <span class="text-red">🔴 Short {short_pct:.1f}%</span>
-                    </div>
-                </div>
-            </div>
-            """)
+        confidence_match = re.search(r"(?:STRONG |MODERATE )?(LONG|SHORT) SIGNAL \(([0-9.]+)%\)", text)
+        if confidence_match:
+            recommendation = confidence_match.group(1)
+            confidence = float(confidence_match.group(2))
+        else:
+            confidence = max(long_pct, short_pct)
 
         # Trade Setup
-        if entry_match:
-            entry = entry_match.group(1)
-            sl = sl_match.group(1) if sl_match else "-"
-            tp1 = tp1_match.group(1) if tp1_match else "-"
-            tp2 = tp2_match.group(1) if tp2_match else "-"
-            tp3 = tp3_match.group(1) if tp3_match else "-"
+        entry_match = re.search(r"Entry: \$([0-9,]+\.[0-9]+)", text)
+        sl_match = re.search(r"Stop Loss: \$([0-9,]+\.[0-9]+) \(([^)]+)\)", text)
+        tp1_match = re.search(r"TP1.*?: \$([0-9,]+\.[0-9]+) \(([^)]+)\)", text)
+        tp2_match = re.search(r"TP2.*?: \$([0-9,]+\.[0-9]+) \(([^)]+)\)", text)
+        tp3_match = re.search(r"TP3.*?: \$([0-9,]+\.[0-9]+) \(([^)]+)\)", text)
 
-            html_parts.append(f"""
-            <div class="section">
-                <div class="section-title">💼 Trade Setup</div>
-                <div class="trade-setup">
-                    <div class="trade-row entry">
-                        <span class="trade-label">🎯 Entry Price</span>
-                        <span class="trade-value yellow">${entry}</span>
-                    </div>
-                    <div class="trade-row sl">
-                        <span class="trade-label">🛡️ Stop Loss</span>
-                        <span class="trade-value red">${sl}</span>
-                    </div>
-                    <div class="trade-row tp">
-                        <span class="trade-label">🎁 Take Profit 1 (40%)</span>
-                        <span class="trade-value green">${tp1}</span>
-                    </div>
-                    <div class="trade-row tp">
-                        <span class="trade-label">🎁 Take Profit 2 (30%)</span>
-                        <span class="trade-value green">${tp2}</span>
-                    </div>
-                    <div class="trade-row tp">
-                        <span class="trade-label">🎁 Take Profit 3 (30%)</span>
-                        <span class="trade-value green">${tp3}</span>
-                    </div>
-                </div>
-            </div>
-            """)
+        # Position Management
+        risk_match = re.search(r"Risk per Trade: ([0-9.]+)% \(\$([0-9,]+\.[0-9]+)\)", text)
+        margin_match = re.search(r"Margin Required: \$([0-9,]+\.[0-9]+)", text)
+        position_match = re.search(r"Position Size: \$([0-9,]+\.[0-9]+)", text)
 
-        # Extract Long Signals
-        long_signals = re.findall(r"(?:📈|📊|💪|💰|✅|🔥|🚀|🔄|☁️)[^\n]+", text.split("SHORT Signals")[0]) if "SHORT Signals" in text else []
+        # Risk/Reward
+        rr1_match = re.search(r"TP1: 1:([0-9.]+)", text)
+        rr2_match = re.search(r"TP2: 1:([0-9.]+)", text)
+        rr3_match = re.search(r"TP3: 1:([0-9.]+)", text)
 
-        # Extract Short Signals
-        short_section = text.split("SHORT Signals")[-1].split("NEUTRAL Signals")[0] if "SHORT Signals" in text else ""
-        short_signals = re.findall(r"(?:📉|📊|💪|⚠️|❌|🔥|🔻|🔄|☁️)[^\n]+", short_section)
+        # Support/Resistance
+        support_matches = re.findall(r"S(\d): \$([0-9,]+\.[0-9]+)", text)
+        resistance_matches = re.findall(r"R(\d): \$([0-9,]+\.[0-9]+)", text)
 
-        # Signal Details
-        if long_signals or short_signals:
-            html_parts.append('<div class="section">')
-            html_parts.append('<div class="section-title">📊 Signal Details</div>')
-            html_parts.append('<ul class="signal-list">')
-
-            for sig in long_signals[:6]:
-                html_parts.append(f'<li class="long">{sig.strip()}</li>')
-
-            for sig in short_signals[:6]:
-                html_parts.append(f'<li class="short">{sig.strip()}</li>')
-
-            html_parts.append('</ul>')
-            html_parts.append('</div>')
-
-        # Extract Indicators
+        # Indicators
         indicators = []
+
+        # Weekly/Daily indicators
+        ema_match = re.search(r"EMA 9/21: \$([0-9,]+\.[0-9]+) / \$([0-9,]+\.[0-9]+)", text)
+        if ema_match:
+            ema9 = ema_match.group(1)
+            ema21 = ema_match.group(2)
 
         rsi_match = re.search(r"RSI: ([0-9.]+)", text)
         if rsi_match:
@@ -489,16 +376,144 @@ class EmailNotifier:
         if macd_match:
             macd = float(macd_match.group(1))
             macd_color = "green" if macd > 0 else "red"
-            indicators.append(("MACD", f"{macd:.2f}", macd_color))
+            indicators.append(("MACD", f"{macd:.0f}", macd_color))
 
         adx_match = re.search(r"ADX: ([0-9.]+)", text)
         if adx_match:
-            indicators.append(("ADX", adx_match.group(1), "blue"))
+            adx = float(adx_match.group(1))
+            adx_color = "green" if adx > 25 else "yellow"
+            indicators.append(("ADX", f"{adx:.1f}", adx_color))
 
         atr_match = re.search(r"ATR: \$([0-9,]+\.[0-9]+) \(([0-9.]+)%\)", text)
         if atr_match:
-            indicators.append(("ATR", f"${atr_match.group(1)} ({atr_match.group(2)}%)", "blue"))
+            indicators.append(("ATR", f"{atr_match.group(2)}%", "blue"))
 
+        mfi_match = re.search(r"MFI: ([0-9.]+)", text)
+        if mfi_match:
+            mfi = float(mfi_match.group(1))
+            mfi_color = "green" if mfi < 20 else "red" if mfi > 80 else "yellow"
+            indicators.append(("MFI", f"{mfi:.1f}", mfi_color))
+
+        cci_match = re.search(r"CCI: ([0-9.-]+)", text)
+        if cci_match:
+            cci = float(cci_match.group(1))
+            cci_color = "green" if cci < -100 else "red" if cci > 100 else "yellow"
+            indicators.append(("CCI", f"{cci:.0f}", cci_color))
+
+        # Trend Scores
+        weekly_trend_match = re.search(r"Weekly Trend Score: [🟢🔴🟡] ([+-]?\d+)", text)
+        daily_trend_match = re.search(r"Daily Trend Score: [🟢🔴🟡] ([+-]?\d+)", text)
+
+        # Supertrend
+        supertrend_match = re.search(r"Supertrend: (Bullish|Bearish)", text)
+
+        # === Build HTML ===
+
+        # Price Display
+        if current_price:
+            html_parts.append(f"""
+            <div class="price-display">
+                <div class="price-label">{symbol} Current Price</div>
+                <div class="price-value">${current_price}</div>
+                <div style="font-size: 11px; color: #8892b0; margin-top: 4px;">{date_str}</div>
+            </div>
+            """)
+
+        # Signal Box
+        signal_class = "signal-long" if recommendation == "LONG" else "signal-short" if recommendation == "SHORT" else "signal-wait"
+        signal_icon = "✅" if recommendation == "LONG" else "❌" if recommendation == "SHORT" else "⏸️"
+        signal_text = f"{recommendation} SIGNAL" if recommendation != "WAIT" else "WAIT - No Clear Signal"
+
+        html_parts.append(f"""
+        <div class="signal-box {signal_class}">
+            <div class="signal-title">{signal_icon} {signal_text}</div>
+            <div class="signal-subtitle">Confidence: {confidence:.1f}% | Leverage: {leverage}x</div>
+            <div class="progress-bar">
+                <div class="progress-long" style="width: {long_pct}%"></div>
+                <div class="progress-short" style="width: {short_pct}%"></div>
+            </div>
+            <div class="progress-labels">
+                <span class="text-green">🟢 Long {long_count} ({long_pct:.1f}%)</span>
+                <span class="text-red">🔴 Short {short_count} ({short_pct:.1f}%)</span>
+            </div>
+        </div>
+        """)
+
+        # Trade Setup
+        if entry_match:
+            entry = entry_match.group(1)
+            sl = sl_match.group(1) if sl_match else "-"
+            sl_info = sl_match.group(2) if sl_match else ""
+            tp1 = tp1_match.group(1) if tp1_match else "-"
+            tp1_info = tp1_match.group(2) if tp1_match else ""
+            tp2 = tp2_match.group(1) if tp2_match else "-"
+            tp2_info = tp2_match.group(2) if tp2_match else ""
+            tp3 = tp3_match.group(1) if tp3_match else "-"
+            tp3_info = tp3_match.group(2) if tp3_match else ""
+
+            html_parts.append(f"""
+            <div class="section">
+                <div class="section-title">💼 Trade Setup</div>
+                <div class="trade-setup">
+                    <div class="trade-row entry">
+                        <span class="trade-label">🎯 Entry</span>
+                        <span class="trade-value yellow">${entry}</span>
+                    </div>
+                    <div class="trade-row sl">
+                        <span class="trade-label">🛡️ Stop Loss</span>
+                        <span class="trade-value red">${sl} <small style="color:#8892b0">({sl_info})</small></span>
+                    </div>
+                    <div class="trade-row tp">
+                        <span class="trade-label">🎁 TP1 (40%)</span>
+                        <span class="trade-value green">${tp1} <small style="color:#8892b0">({tp1_info})</small></span>
+                    </div>
+                    <div class="trade-row tp">
+                        <span class="trade-label">🎁 TP2 (30%)</span>
+                        <span class="trade-value green">${tp2} <small style="color:#8892b0">({tp2_info})</small></span>
+                    </div>
+                    <div class="trade-row tp">
+                        <span class="trade-label">🎁 TP3 (30%)</span>
+                        <span class="trade-value green">${tp3} <small style="color:#8892b0">({tp3_info})</small></span>
+                    </div>
+                </div>
+            </div>
+            """)
+
+        # Position & Risk Management
+        if risk_match or margin_match:
+            risk_pct = risk_match.group(1) if risk_match else "2"
+            risk_amt = risk_match.group(2) if risk_match else "-"
+            margin = margin_match.group(1) if margin_match else "-"
+            pos_size = position_match.group(1) if position_match else "-"
+            rr1 = rr1_match.group(1) if rr1_match else "-"
+            rr2 = rr2_match.group(1) if rr2_match else "-"
+            rr3 = rr3_match.group(1) if rr3_match else "-"
+
+            html_parts.append(f"""
+            <div class="section">
+                <div class="section-title">💰 Position Management</div>
+                <div class="info-grid">
+                    <div class="info-item">
+                        <div class="info-label">Risk</div>
+                        <div class="info-value text-yellow">{risk_pct}% (${risk_amt})</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Margin</div>
+                        <div class="info-value">${margin}</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Position Size</div>
+                        <div class="info-value text-blue">${pos_size}</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">R:R Ratio</div>
+                        <div class="info-value text-green">1:{rr1} / 1:{rr2} / 1:{rr3}</div>
+                    </div>
+                </div>
+            </div>
+            """)
+
+        # Key Indicators
         if indicators:
             html_parts.append('<div class="section">')
             html_parts.append('<div class="section-title">📈 Key Indicators</div>')
@@ -510,52 +525,96 @@ class EmailNotifier:
                     <div class="indicator-value text-{color}">{value}</div>
                 </div>
                 """)
+
+            # Add Trend Scores
+            if weekly_trend_match:
+                wt = int(weekly_trend_match.group(1))
+                wt_color = "green" if wt > 0 else "red" if wt < 0 else "yellow"
+                html_parts.append(f"""
+                <div class="indicator-item">
+                    <div class="indicator-label">Weekly Trend</div>
+                    <div class="indicator-value text-{wt_color}">{wt:+d}</div>
+                </div>
+                """)
+
+            if daily_trend_match:
+                dt = int(daily_trend_match.group(1))
+                dt_color = "green" if dt > 0 else "red" if dt < 0 else "yellow"
+                html_parts.append(f"""
+                <div class="indicator-item">
+                    <div class="indicator-label">Daily Trend</div>
+                    <div class="indicator-value text-{dt_color}">{dt:+d}</div>
+                </div>
+                """)
+
+            if supertrend_match:
+                st = supertrend_match.group(1)
+                st_color = "green" if st == "Bullish" else "red"
+                html_parts.append(f"""
+                <div class="indicator-item">
+                    <div class="indicator-label">Supertrend</div>
+                    <div class="indicator-value text-{st_color}">{st}</div>
+                </div>
+                """)
+
             html_parts.append('</div>')
             html_parts.append('</div>')
 
-        # If no structured content was found, show raw content
-        if not html_parts:
-            styled_text = self._style_raw_text(text)
-            html_parts.append(f'<div class="raw-content">{styled_text}</div>')
+        # Support & Resistance
+        if support_matches or resistance_matches:
+            html_parts.append('<div class="section">')
+            html_parts.append('<div class="section-title">📊 Support & Resistance</div>')
+
+            html_parts.append('<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">')
+
+            # Resistance
+            html_parts.append('<div>')
+            html_parts.append('<div style="font-size: 11px; color: #e94560; margin-bottom: 6px;">🔒 RESISTANCE</div>')
+            html_parts.append('<ul class="level-list">')
+            for r in resistance_matches[:3]:
+                html_parts.append(f'<li><span>R{r[0]}</span><span class="text-red">${r[1]}</span></li>')
+            html_parts.append('</ul>')
+            html_parts.append('</div>')
+
+            # Support
+            html_parts.append('<div>')
+            html_parts.append('<div style="font-size: 11px; color: #34e89e; margin-bottom: 6px;">🛡️ SUPPORT</div>')
+            html_parts.append('<ul class="level-list">')
+            for s in support_matches[:3]:
+                html_parts.append(f'<li><span>S{s[0]}</span><span class="text-green">${s[1]}</span></li>')
+            html_parts.append('</ul>')
+            html_parts.append('</div>')
+
+            html_parts.append('</div>')
+            html_parts.append('</div>')
+
+        # Signal Details
+        long_signals = re.findall(r"  ((?:📈|📊|💪|💰|✅|🔥|🚀|🔄|☁️)[^\n]+)", text.split("SHORT Signals")[0]) if "SHORT Signals" in text else []
+        short_section = text.split("SHORT Signals")[-1].split("NEUTRAL Signals")[0] if "SHORT Signals" in text else ""
+        short_signals = re.findall(r"  ((?:📉|📊|💪|⚠️|❌|🔥|🔻|🔄|☁️)[^\n]+)", short_section)
+
+        if long_signals or short_signals:
+            html_parts.append('<div class="section">')
+            html_parts.append('<div class="section-title">📋 Signal Details</div>')
+            html_parts.append('<ul class="signal-list">')
+
+            for sig in long_signals[:8]:
+                html_parts.append(f'<li class="long">{sig.strip()}</li>')
+
+            for sig in short_signals[:8]:
+                html_parts.append(f'<li class="short">{sig.strip()}</li>')
+
+            html_parts.append('</ul>')
+            html_parts.append('</div>')
 
         return "\n".join(html_parts)
-
-    def _style_raw_text(self, text):
-        """Style raw text with colors"""
-        replacements = [
-            ("✅", '<span class="text-green">✅</span>'),
-            ("❌", '<span class="text-red">❌</span>'),
-            ("⚠️", '<span class="text-yellow">⚠️</span>'),
-            ("🟢", '<span class="text-green">🟢</span>'),
-            ("🔴", '<span class="text-red">🔴</span>'),
-            ("🟡", '<span class="text-yellow">🟡</span>'),
-            ("📈", '<span class="text-green">📈</span>'),
-            ("📉", '<span class="text-red">📉</span>'),
-            ("💰", '<span class="text-yellow">💰</span>'),
-            ("🎯", '<span class="text-blue">🎯</span>'),
-            ("🛡️", '<span class="text-green">🛡️</span>'),
-            ("🎁", '<span class="text-yellow">🎁</span>'),
-            ("💵", '<span class="text-green">💵</span>'),
-            ("🔥", '<span class="text-red">🔥</span>'),
-            ("📊", '<span class="text-blue">📊</span>'),
-            ("💪", '<span class="text-green">💪</span>'),
-            ("🚀", '<span class="text-green">🚀</span>'),
-            ("🔻", '<span class="text-red">🔻</span>'),
-            ("☁️", '<span class="text-blue">☁️</span>'),
-            ("=" * 100, '<hr style="border-color: #3a4a6b; margin: 16px 0;">'),
-            ("=" * 50, '<hr style="border-color: #3a4a6b; margin: 12px 0;">'),
-        ]
-
-        for old, new in replacements:
-            text = text.replace(old, new)
-
-        return text
 
     def send_email(self, console_output, mode):
         """ส่งอีเมล"""
         try:
+            mode_icon = "📅" if mode.lower() == "weekly" else "🌙"
             msg = MIMEMultipart("alternative")
-            msg["Subject"] = f"🔥 Crypto Bot Alert - {mode.upper()} Analysis - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            msg["Subject"] = f"{mode_icon} Crypto Bot - {mode.upper()} Analysis - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
             msg["From"] = self.sender_email
             msg["To"] = self.recipient_email
 
@@ -575,7 +634,7 @@ class EmailNotifier:
                 server.sendmail(self.sender_email, self.recipient_email, msg.as_string())
 
             print("\n" + "=" * 50)
-            print("📧 EMAIL SENT SUCCESSFULLY!")
+            print(f"📧 {mode.upper()} EMAIL SENT SUCCESSFULLY!")
             print(f"   To: {self.recipient_email}")
             print("=" * 50)
             return True
@@ -583,7 +642,4 @@ class EmailNotifier:
         except Exception as e:
             print(f"\n❌ Failed to send email: {e}")
             print("💡 Make sure you have set up App Password for Gmail")
-            print("   1. Go to Google Account > Security")
-            print("   2. Enable 2-Factor Authentication")
-            print("   3. Create App Password for 'Mail'")
             return False

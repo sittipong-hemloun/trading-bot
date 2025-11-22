@@ -8,6 +8,7 @@ import sys
 import os
 import io
 
+from dotenv import load_dotenv
 from strategies import WeeklyTradingStrategy, MonthlyTradingStrategy
 from email_notifier import EmailNotifier
 
@@ -34,75 +35,80 @@ def print_usage():
     print("  BOT_EMAIL_RECIPIENT - Recipient email address")
 
 
-def run_analysis(mode, symbol="BTCUSDT", balance=10000):
-    """รันการวิเคราะห์และ return output"""
+def run_weekly_analysis(symbol="BTCUSDT", balance=10000):
+    """รันการวิเคราะห์ Weekly และ return output"""
+    print("\n" + "━" * 100)
+    print("                         📅 WEEKLY ANALYSIS")
+    print("━" * 100 + "\n")
 
-    all_output = ""
+    weekly_trader = WeeklyTradingStrategy(symbol=symbol, leverage=5)
 
-    if mode in ["weekly", "w", "both", "all"]:
-        print("\n" + "━" * 100)
-        print("                         📅 WEEKLY ANALYSIS")
-        print("━" * 100 + "\n")
+    # Capture output
+    old_stdout = sys.stdout
+    sys.stdout = buffer = io.StringIO()
+    weekly_trader.get_weekly_recommendation(balance=balance)
+    weekly_output = buffer.getvalue()
+    sys.stdout = old_stdout
 
-        weekly_trader = WeeklyTradingStrategy(symbol=symbol, leverage=5)
-
-        # Capture output
-        old_stdout = sys.stdout
-        sys.stdout = buffer = io.StringIO()
-        weekly_trader.get_weekly_recommendation(balance=balance)
-        weekly_output = buffer.getvalue()
-        sys.stdout = old_stdout
-
-        print(weekly_output)
-        all_output += "\n📅 WEEKLY ANALYSIS\n" + "=" * 50 + "\n" + weekly_output
-
-    if mode in ["monthly", "m", "both", "all"]:
-        print("\n" + "━" * 100)
-        print("                         🌙 MONTHLY ANALYSIS")
-        print("━" * 100 + "\n")
-
-        monthly_trader = MonthlyTradingStrategy(symbol=symbol, leverage=3)
-
-        # Capture output
-        old_stdout = sys.stdout
-        sys.stdout = buffer = io.StringIO()
-        monthly_trader.get_monthly_recommendation(balance=balance)
-        monthly_output = buffer.getvalue()
-        sys.stdout = old_stdout
-
-        print(monthly_output)
-        all_output += "\n\n🌙 MONTHLY ANALYSIS\n" + "=" * 50 + "\n" + monthly_output
-
-    return all_output
+    print(weekly_output)
+    return weekly_output
 
 
-def send_email_notification(output, mode):
+def run_monthly_analysis(symbol="BTCUSDT", balance=10000):
+    """รันการวิเคราะห์ Monthly และ return output"""
+    print("\n" + "━" * 100)
+    print("                         🌙 MONTHLY ANALYSIS")
+    print("━" * 100 + "\n")
+
+    monthly_trader = MonthlyTradingStrategy(symbol=symbol, leverage=3)
+
+    # Capture output
+    old_stdout = sys.stdout
+    sys.stdout = buffer = io.StringIO()
+    monthly_trader.get_monthly_recommendation(balance=balance)
+    monthly_output = buffer.getvalue()
+    sys.stdout = old_stdout
+
+    print(monthly_output)
+    return monthly_output
+
+
+def get_email_config():
+    """ดึงค่า email configuration จาก environment variables"""
+    email_sender = os.getenv("BOT_EMAIL_SENDER")
+    email_password = os.getenv("BOT_EMAIL_PASSWORD")
+    email_recipient = os.getenv("BOT_EMAIL_RECIPIENT")
+
+    return email_sender, email_password, email_recipient
+
+
+def send_email_notification(output, mode, email_sender, email_password, email_recipient):
     """ส่งอีเมลแจ้งเตือน"""
-
-    # Email configuration from environment variables
-    email_sender = os.getenv("BOT_EMAIL_SENDER", "ong22280@gmail.com")
-    email_password = os.getenv("BOT_EMAIL_PASSWORD", "tdkr anye gaam lped")
-    email_recipient = os.getenv("BOT_EMAIL_RECIPIENT", "ong22280@gmail.com")
-
     if email_sender and email_password:
         notifier = EmailNotifier(email_sender, email_password, email_recipient)
         notifier.send_email(output, mode)
-    else:
-        print("\n" + "=" * 50)
-        print("📧 EMAIL NOT CONFIGURED")
-        print("   To enable email notifications:")
-        print("   1. Set BOT_EMAIL_SENDER environment variable")
-        print("   2. Set BOT_EMAIL_PASSWORD (Gmail App Password)")
-        print("   3. Optionally set BOT_EMAIL_RECIPIENT")
-        print("")
-        print("   Example:")
-        print("     export BOT_EMAIL_SENDER='ong22280@gmail.com'")
-        print("     export BOT_EMAIL_PASSWORD='tdkr anye gaam lped'")
-        print("=" * 50)
+        return True
+    return False
+
+
+def print_email_not_configured():
+    """แสดงข้อความเมื่อยังไม่ได้ตั้งค่าอีเมล"""
+    print("\n" + "=" * 50)
+    print("📧 EMAIL NOT CONFIGURED")
+    print("   To enable email notifications:")
+    print("   1. Set BOT_EMAIL_SENDER environment variable")
+    print("   2. Set BOT_EMAIL_PASSWORD (Gmail App Password)")
+    print("   3. Optionally set BOT_EMAIL_RECIPIENT")
+    print("")
+    print("   Example:")
+    print("     export BOT_EMAIL_SENDER='your@gmail.com'")
+    print("     export BOT_EMAIL_PASSWORD='your-app-password'")
+    print("=" * 50)
 
 
 def main():
     """Main entry point"""
+    load_dotenv()
 
     # Configuration
     symbol = "BTCUSDT"
@@ -134,12 +140,40 @@ def main():
         print_usage()
         return
 
-    # Run analysis
-    output = run_analysis(mode, symbol, balance)
+    # Get email config
+    email_sender, email_password, email_recipient = get_email_config()
+    email_configured = bool(email_sender and email_password)
 
-    # Send email if configured
-    if send_email and output:
-        send_email_notification(output, mode)
+    # Track outputs for separate emails
+    weekly_output = None
+    monthly_output = None
+
+    # Run analyses
+    if mode in ["weekly", "w", "both", "all"]:
+        weekly_output = run_weekly_analysis(symbol, balance)
+
+    if mode in ["monthly", "m", "both", "all"]:
+        monthly_output = run_monthly_analysis(symbol, balance)
+
+    # Send separate emails
+    if send_email:
+        if email_configured:
+            # ส่งอีเมลแยก 2 ฉบับ
+            if weekly_output:
+                print("\n📧 Sending WEEKLY analysis email...")
+                send_email_notification(
+                    weekly_output, "weekly",
+                    email_sender, email_password, email_recipient
+                )
+
+            if monthly_output:
+                print("\n📧 Sending MONTHLY analysis email...")
+                send_email_notification(
+                    monthly_output, "monthly",
+                    email_sender, email_password, email_recipient
+                )
+        else:
+            print_email_not_configured()
 
 
 if __name__ == "__main__":
