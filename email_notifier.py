@@ -147,6 +147,7 @@ class EmailNotifier:
             background: #1e2a4a;
             border-radius: 8px;
             padding: 10px;
+            margin-bottom: 4px;
             border-left: 3px solid #4dabf7;
         }}
         .indicator-label {{
@@ -362,11 +363,6 @@ class EmailNotifier:
         indicators = []
 
         # Weekly/Daily indicators
-        ema_match = re.search(r"EMA 9/21: \$([0-9,]+\.[0-9]+) / \$([0-9,]+\.[0-9]+)", text)
-        if ema_match:
-            ema9 = ema_match.group(1)
-            ema21 = ema_match.group(2)
-
         rsi_match = re.search(r"RSI: ([0-9.]+)", text)
         if rsi_match:
             rsi = float(rsi_match.group(1))
@@ -425,6 +421,9 @@ class EmailNotifier:
         signal_icon = "✅" if recommendation == "LONG" else "❌" if recommendation == "SHORT" else "⏸️"
         signal_text = f"{recommendation} SIGNAL" if recommendation != "WAIT" else "WAIT - No Clear Signal"
 
+        # Calculate neutral percentage
+        neutral_pct = 100 - long_pct - short_pct if (long_pct + short_pct) <= 100 else 0
+
         html_parts.append(f"""
         <div class="signal-box {signal_class}">
             <div class="signal-title">{signal_icon} {signal_text}</div>
@@ -432,9 +431,11 @@ class EmailNotifier:
             <div class="progress-bar">
                 <div class="progress-long" style="width: {long_pct}%"></div>
                 <div class="progress-short" style="width: {short_pct}%"></div>
+                <div style="background: #6b6b2a; height: 100%; width: {neutral_pct}%"></div>
             </div>
             <div class="progress-labels">
                 <span class="text-green">🟢 Long {long_count} ({long_pct:.1f}%)</span>
+                <span style="color: #ffd700;">⚪ Neutral {neutral_count} ({neutral_pct:.1f}%)</span>
                 <span class="text-red">🔴 Short {short_count} ({short_pct:.1f}%)</span>
             </div>
         </div>

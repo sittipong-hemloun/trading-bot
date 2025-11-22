@@ -8,7 +8,13 @@ Usage:
     # Or import specific utilities
     from trading.indicators import calculate_indicators
     from trading.analysis import detect_market_regime
+
+    # Or use the base class for custom strategies
+    from trading import BaseStrategy
 """
+
+# Base strategy class
+from trading.base_strategy import BaseStrategy
 
 # Main strategy classes
 from trading.weekly_strategy import WeeklyTradingStrategy
@@ -43,6 +49,8 @@ from trading.risk import (
 )
 
 __all__ = [
+    # Base class
+    "BaseStrategy",
     # Strategy classes
     "WeeklyTradingStrategy",
     "MonthlyTradingStrategy",
