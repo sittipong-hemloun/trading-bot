@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Crypto Trading Analysis Bot v2.0
+Crypto Trading Analysis Bot
 Main entry point
 """
 
@@ -15,7 +15,7 @@ from email_notifier import EmailNotifier
 def print_banner():
     """แสดง banner ของ bot"""
     print("\n" + "🔥" * 50)
-    print("          CRYPTO TRADING ANALYSIS BOT v2.0")
+    print("          CRYPTO TRADING ANALYSIS BOT")
     print("          Enhanced with Advanced Indicators")
     print("🔥" * 50 + "\n")
 
