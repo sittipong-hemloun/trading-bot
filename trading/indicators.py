@@ -4,6 +4,7 @@ Contains functions for calculating technical indicators
 """
 
 import pandas as pd
+import numpy as np
 import pandas_ta as ta
 
 
@@ -20,12 +21,16 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     # === RSI ===
     df["RSI"] = ta.rsi(df["close"], length=14)
+    # RSI Smoothed (EMA of RSI) - ลด noise
+    df["RSI_smoothed"] = ta.ema(df["RSI"], length=3)
 
     # === MACD ===
     macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
     df["MACD"] = macd["MACD_12_26_9"]
     df["MACD_signal"] = macd["MACDs_12_26_9"]
     df["MACD_histogram"] = macd["MACDh_12_26_9"]
+    # MACD Histogram change - ตรวจจับ momentum shift
+    df["MACD_hist_change"] = df["MACD_histogram"] - df["MACD_histogram"].shift(1)
 
     # === Stochastic RSI ===
     stochrsi = ta.stochrsi(df["close"], length=14, rsi_length=14, k=3, d=3)
@@ -43,8 +48,12 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["BB_middle"] = bbands["BBM_20_2.0_2.0"]
     df["BB_lower"] = bbands["BBL_20_2.0_2.0"]
     df["BB_width"] = (df["BB_upper"] - df["BB_lower"]) / df["BB_middle"] * 100
-    df["BB_percent"] = (df["close"] - df["BB_lower"]) / (
-        df["BB_upper"] - df["BB_lower"]
+    # ป้องกัน division by zero
+    bb_range = df["BB_upper"] - df["BB_lower"]
+    df["BB_percent"] = np.where(
+        bb_range > 0,
+        (df["close"] - df["BB_lower"]) / bb_range,
+        0.5  # กลางกรณี bands แคบมาก
     )
 
     # === ADX (Trend Strength) ===
@@ -91,9 +100,16 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
         pass
 
     # === VWAP (Volume Weighted Average Price) ===
-    # VWAP requires DatetimeIndex, so we calculate manually
+    # Rolling VWAP (20 periods) - แม่นยำกว่า cumulative สำหรับ swing trading
     typical_price_vwap = (df["high"] + df["low"] + df["close"]) / 3
-    df["VWAP"] = (typical_price_vwap * df["volume"]).cumsum() / df["volume"].cumsum()
+    df["VWAP"] = (
+        (typical_price_vwap * df["volume"]).rolling(window=20).sum() /
+        df["volume"].rolling(window=20).sum()
+    )
+    # VWAP Bands (standard deviation) สำหรับหา overbought/oversold
+    vwap_std = typical_price_vwap.rolling(window=20).std()
+    df["VWAP_upper"] = df["VWAP"] + (vwap_std * 2)
+    df["VWAP_lower"] = df["VWAP"] - (vwap_std * 2)
 
     # === Supertrend ===
     supertrend = ta.supertrend(df["high"], df["low"], df["close"], length=10, multiplier=3.0)
@@ -116,13 +132,56 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     # === Candle Patterns ===
     df["BODY"] = abs(df["close"] - df["open"])
     df["RANGE"] = df["high"] - df["low"]
-    df["BODY_PERCENT"] = df["BODY"] / df["RANGE"] * 100
+    # ป้องกัน division by zero
+    df["BODY_PERCENT"] = np.where(
+        df["RANGE"] > 0,
+        df["BODY"] / df["RANGE"] * 100,
+        0
+    )
     df["IS_BULLISH"] = df["close"] > df["open"]
     df["IS_BEARISH"] = df["close"] < df["open"]
 
     # === Momentum ===
     df["ROC"] = ta.roc(df["close"], length=10)
     df["MOM"] = ta.mom(df["close"], length=10)
+
+    # === Keltner Channel (สำหรับ Squeeze Detection) ===
+    kc_ema = ta.ema(df["close"], length=20)
+    kc_atr = ta.atr(df["high"], df["low"], df["close"], length=10)
+    df["KC_upper"] = kc_ema + (kc_atr * 1.5)
+    df["KC_lower"] = kc_ema - (kc_atr * 1.5)
+    # Squeeze Detection: BB inside KC = low volatility, potential breakout
+    df["SQUEEZE"] = (df["BB_lower"] > df["KC_lower"]) & (df["BB_upper"] < df["KC_upper"])
+    df["SQUEEZE_OFF"] = ~df["SQUEEZE"]
+
+    # === CMF (Chaikin Money Flow) - Volume confirmation ===
+    mf_multiplier = np.where(
+        (df["high"] - df["low"]) > 0,
+        ((df["close"] - df["low"]) - (df["high"] - df["close"])) / (df["high"] - df["low"]),
+        0
+    )
+    mf_volume = mf_multiplier * df["volume"]
+    df["CMF"] = mf_volume.rolling(window=20).sum() / df["volume"].rolling(window=20).sum()
+
+    # === Volume Profile Approximation (VAH, VAL) ===
+    # Value Area High/Low - price zones with most trading activity
+    df["VAH"] = df["high"].rolling(window=20).apply(
+        lambda x: np.percentile(x, 70), raw=True
+    )  # Value Area High (70th percentile)
+    df["VAL"] = df["low"].rolling(window=20).apply(
+        lambda x: np.percentile(x, 30), raw=True
+    )  # Value Area Low (30th percentile)
+
+    # === True Strength Index (TSI) - Better momentum indicator ===
+    price_change = df["close"].diff()
+    double_smoothed_pc = ta.ema(ta.ema(price_change, length=25), length=13)
+    double_smoothed_abs_pc = ta.ema(ta.ema(abs(price_change), length=25), length=13)
+    df["TSI"] = np.where(
+        double_smoothed_abs_pc != 0,
+        100 * (double_smoothed_pc / double_smoothed_abs_pc),
+        0
+    )
+    df["TSI_signal"] = ta.ema(df["TSI"], length=7)
 
     # === Candlestick Patterns ===
     df = detect_candlestick_patterns(df)

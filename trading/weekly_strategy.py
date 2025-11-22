@@ -1074,7 +1074,7 @@ class WeeklyTradingStrategy:
         return base_score * weight
 
     def get_weekly_signal(self):
-        """วิเคราะห์สัญญาณ Weekly แบบปรับปรุง พร้อมข้อมูลย้อนหลังและ Multi-Indicator Confirmation"""
+        """วิเคราะห์สัญญาณ Weekly แบบปรับปรุง พร้อม Weighted Scoring System"""
 
         weekly = self.data["weekly"].iloc[-1]
         daily = self.data["daily"].iloc[-1]
@@ -1088,22 +1088,62 @@ class WeeklyTradingStrategy:
         historical_perf = self.analyze_historical_performance(self.data["daily"])
         trend_consistency = self.check_trend_consistency()
 
-        # === NEW: Advanced Analysis ===
-        # Dynamic Thresholds based on volatility
+        # === Advanced Analysis ===
         dynamic_thresholds = self.get_dynamic_thresholds(self.data["daily"])
-
-        # Multi-Indicator Confirmation
         multi_indicator = self.get_multi_indicator_confirmation(self.data["daily"])
-
-        # Volume Confirmation
         volume_confirm = self.get_volume_confirmation(self.data["daily"])
-
-        # Candlestick Pattern Signals
         candlestick_signals = self.get_candlestick_signals(self.data["daily"])
-
-        # Confluence Zones
         current_price = daily["close"]
         confluence_zones = self.find_confluence_zones(self.data["daily"], current_price)
+
+        # === WEIGHT CONFIGURATION ===
+        # Higher timeframe = Higher weight (Weekly > Daily > 4H)
+        # Stronger signals = Higher weight
+        WEIGHTS = {
+            # Timeframe weights
+            "weekly_trend": 5,        # Weekly EMA trend (most important)
+            "weekly_cross": 8,        # Golden/Death cross (very strong)
+            "weekly_rsi_extreme": 4,  # RSI < 30 or > 70
+            "weekly_rsi_moderate": 2, # RSI 30-40 or 60-70
+            "weekly_macd": 3,         # MACD signal
+            "weekly_macd_momentum": 2,# MACD histogram increasing
+            "weekly_stochrsi": 3,     # StochRSI extreme
+
+            "daily_trend": 3,         # Daily EMA trend
+            "daily_rsi_extreme": 4,   # RSI extreme with dynamic threshold
+            "daily_macd_cross": 3,    # MACD crossover
+            "daily_divergence_strong": 5,  # Strong divergence
+            "daily_divergence_moderate": 3,# Moderate divergence
+            "daily_divergence_weak": 2,    # Weak divergence
+
+            "h4_trend": 1,            # 4H alignment
+            "h4_supertrend": 2,       # Supertrend
+
+            # Confirmation weights
+            "trend_consistency": 4,   # Multi-timeframe alignment
+            "multi_indicator_strong": 5,  # 4+ indicators confirm
+            "multi_indicator_moderate": 3,# 3 indicators confirm
+            "volume_confirmed": 4,    # Volume + OBV confirmation
+            "candlestick_strong": 4,  # Strong candlestick pattern
+            "candlestick_moderate": 2,# Moderate candlestick pattern
+            "confluence_zone": 3,     # Near support/resistance confluence
+
+            # New indicators weights
+            "squeeze_breakout": 4,    # Squeeze release (potential big move)
+            "tsi_signal": 3,          # TSI crossover
+            "cmf_strong": 3,          # CMF > 0.2 or < -0.2
+            "cmf_moderate": 2,        # CMF confirmation
+            "vwap_position": 2,       # Price vs VWAP
+
+            # Trend strength
+            "adx_strong": 3,          # ADX > 25
+            "adx_weak": -2,           # ADX < 20 (reduces confidence)
+
+            # Risk factors (negative weights)
+            "counter_trend": -2,      # Trading against higher timeframe
+            "low_volume": -2,         # Below average volume
+            "mixed_signals": -1,      # Conflicting indicators
+        }
 
         signals = {"long": 0, "short": 0, "neutral": 0}
         reasons = {"long": [], "short": [], "neutral": []}
@@ -1118,182 +1158,271 @@ class WeeklyTradingStrategy:
                 f"Avg Return {historical_perf['avg_return']:.2f}%"
             )
 
+        # === TREND CONSISTENCY (Multi-timeframe alignment) ===
         if trend_consistency["consistent"]:
             direction = trend_consistency["direction"]
             if direction == "bullish":
-                signals["long"] += 3
+                signals["long"] += WEIGHTS["trend_consistency"]
                 reasons["long"].append(f"✅ Trend Consistency: Strong Bullish ({trend_consistency['score']:.0f}%)")
             elif direction == "bearish":
-                signals["short"] += 3
+                signals["short"] += WEIGHTS["trend_consistency"]
                 reasons["short"].append(f"✅ Trend Consistency: Strong Bearish ({trend_consistency['score']:.0f}%)")
         else:
             signals["neutral"] += 1
             reasons["neutral"].append(f"⚠️ Mixed Trend ({trend_consistency['score']:.0f}%)")
 
-        # === NEW: Multi-Indicator Confirmation ===
+        # === MULTI-INDICATOR CONFIRMATION ===
         if multi_indicator["confirmations"] >= 4:
+            weight = WEIGHTS["multi_indicator_strong"]
             if multi_indicator["direction"] == "bullish":
-                signals["long"] += 4
-                reasons["long"].append(f"🎯 Multi-Indicator Confirmed Bullish ({multi_indicator['confirmations']}/6, Strength: {multi_indicator['strength']:.0f}%)")
+                signals["long"] += weight
+                reasons["long"].append(f"🎯 Multi-Indicator Confirmed Bullish ({multi_indicator['confirmations']}/6)")
             elif multi_indicator["direction"] == "bearish":
-                signals["short"] += 4
-                reasons["short"].append(f"🎯 Multi-Indicator Confirmed Bearish ({multi_indicator['confirmations']}/6, Strength: {multi_indicator['strength']:.0f}%)")
+                signals["short"] += weight
+                reasons["short"].append(f"🎯 Multi-Indicator Confirmed Bearish ({multi_indicator['confirmations']}/6)")
         elif multi_indicator["confirmations"] >= 3:
+            weight = WEIGHTS["multi_indicator_moderate"]
             if multi_indicator["direction"] == "bullish":
-                signals["long"] += 2
+                signals["long"] += weight
                 reasons["long"].append(f"📊 Multi-Indicator Bullish ({multi_indicator['confirmations']}/6)")
             elif multi_indicator["direction"] == "bearish":
-                signals["short"] += 2
+                signals["short"] += weight
                 reasons["short"].append(f"📊 Multi-Indicator Bearish ({multi_indicator['confirmations']}/6)")
 
-        # === NEW: Volume Confirmation ===
+        # === VOLUME CONFIRMATION (Enhanced with CMF) ===
         if volume_confirm["confirmed"]:
             if volume_confirm["obv_trend"] == "bullish":
-                signals["long"] += 3
-                reasons["long"].append(f"📈 Volume Confirmed with Bullish OBV ({volume_confirm['volume_ratio']:.1f}x)")
+                signals["long"] += WEIGHTS["volume_confirmed"]
+                reasons["long"].append(f"📈 Volume Confirmed Bullish ({volume_confirm['volume_ratio']:.1f}x)")
             elif volume_confirm["obv_trend"] == "bearish":
-                signals["short"] += 3
-                reasons["short"].append(f"📉 Volume Confirmed with Bearish OBV ({volume_confirm['volume_ratio']:.1f}x)")
+                signals["short"] += WEIGHTS["volume_confirmed"]
+                reasons["short"].append(f"📉 Volume Confirmed Bearish ({volume_confirm['volume_ratio']:.1f}x)")
+        elif volume_confirm["volume_ratio"] < 0.5:
+            # Low volume warning
+            signals["neutral"] += abs(WEIGHTS["low_volume"])
+            reasons["neutral"].append(f"⚠️ Low Volume Warning ({volume_confirm['volume_ratio']:.1f}x)")
 
-        if volume_confirm["volume_trend"] == "increasing" and volume_confirm["volume_ratio"] > 1.5:
-            reasons["neutral"].append(f"📊 Volume Trend: Increasing ({volume_confirm['volume_ratio']:.1f}x avg)")
+        # === CMF (Chaikin Money Flow) - New indicator ===
+        if pd.notna(daily.get("CMF")):
+            cmf = daily["CMF"]
+            if cmf > 0.2:
+                signals["long"] += WEIGHTS["cmf_strong"]
+                reasons["long"].append(f"💰 CMF Strong Bullish: {cmf:.2f}")
+            elif cmf > 0.05:
+                signals["long"] += WEIGHTS["cmf_moderate"]
+                reasons["long"].append(f"💰 CMF Bullish: {cmf:.2f}")
+            elif cmf < -0.2:
+                signals["short"] += WEIGHTS["cmf_strong"]
+                reasons["short"].append(f"💰 CMF Strong Bearish: {cmf:.2f}")
+            elif cmf < -0.05:
+                signals["short"] += WEIGHTS["cmf_moderate"]
+                reasons["short"].append(f"💰 CMF Bearish: {cmf:.2f}")
 
-        # === NEW: Candlestick Pattern Signals ===
+        # === SQUEEZE DETECTION (Keltner inside BB) ===
+        if pd.notna(daily.get("SQUEEZE")) and pd.notna(daily.get("SQUEEZE_OFF")):
+            # Squeeze just released = potential big move
+            squeeze_prev = self.data["daily"].iloc[-2].get("SQUEEZE", False)
+            if squeeze_prev and daily["SQUEEZE_OFF"]:
+                # Squeeze just released - determine direction from momentum
+                if pd.notna(daily.get("MACD_hist_change")) and daily["MACD_hist_change"] > 0:
+                    signals["long"] += WEIGHTS["squeeze_breakout"]
+                    reasons["long"].append("🔥 Squeeze Breakout - Bullish Momentum")
+                elif pd.notna(daily.get("MACD_hist_change")) and daily["MACD_hist_change"] < 0:
+                    signals["short"] += WEIGHTS["squeeze_breakout"]
+                    reasons["short"].append("🔥 Squeeze Breakout - Bearish Momentum")
+            elif daily["SQUEEZE"]:
+                reasons["neutral"].append("⏳ In Squeeze - Wait for Breakout")
+
+        # === TSI (True Strength Index) ===
+        if pd.notna(daily.get("TSI")) and pd.notna(daily.get("TSI_signal")):
+            tsi = daily["TSI"]
+            tsi_signal = daily["TSI_signal"]
+            tsi_prev = self.data["daily"].iloc[-2].get("TSI", 0)
+            tsi_signal_prev = self.data["daily"].iloc[-2].get("TSI_signal", 0)
+
+            # TSI crossover
+            if tsi_prev <= tsi_signal_prev and tsi > tsi_signal:
+                signals["long"] += WEIGHTS["tsi_signal"]
+                reasons["long"].append(f"📈 TSI Bullish Cross: {tsi:.1f}")
+            elif tsi_prev >= tsi_signal_prev and tsi < tsi_signal:
+                signals["short"] += WEIGHTS["tsi_signal"]
+                reasons["short"].append(f"📉 TSI Bearish Cross: {tsi:.1f}")
+            # TSI extreme levels
+            elif tsi < -25:
+                signals["long"] += 2
+                reasons["long"].append(f"💪 TSI Oversold: {tsi:.1f}")
+            elif tsi > 25:
+                signals["short"] += 2
+                reasons["short"].append(f"⚠️ TSI Overbought: {tsi:.1f}")
+
+        # === VWAP Position ===
+        if pd.notna(daily.get("VWAP")):
+            vwap = daily["VWAP"]
+            if current_price > vwap * 1.02:  # 2% above VWAP
+                signals["long"] += WEIGHTS["vwap_position"]
+                reasons["long"].append(f"📈 Price Above VWAP: ${vwap:,.0f}")
+            elif current_price < vwap * 0.98:  # 2% below VWAP
+                signals["short"] += WEIGHTS["vwap_position"]
+                reasons["short"].append(f"📉 Price Below VWAP: ${vwap:,.0f}")
+
+        # === CANDLESTICK PATTERNS ===
         total_patterns = len(candlestick_signals["bullish"]) + len(candlestick_signals["bearish"])
         if total_patterns > 0:
             cs_score = candlestick_signals["score"]
             if cs_score >= 3:
-                signals["long"] += 3
+                signals["long"] += WEIGHTS["candlestick_strong"]
                 patterns_str = ", ".join(candlestick_signals["bullish"][:2])
                 reasons["long"].append(f"🕯️ Strong Bullish Patterns: {patterns_str}")
             elif cs_score >= 1:
-                signals["long"] += 1
+                signals["long"] += WEIGHTS["candlestick_moderate"]
                 patterns_str = ", ".join(candlestick_signals["bullish"][:1])
                 reasons["long"].append(f"🕯️ Bullish Pattern: {patterns_str}")
             elif cs_score <= -3:
-                signals["short"] += 3
+                signals["short"] += WEIGHTS["candlestick_strong"]
                 patterns_str = ", ".join(candlestick_signals["bearish"][:2])
                 reasons["short"].append(f"🕯️ Strong Bearish Patterns: {patterns_str}")
             elif cs_score <= -1:
-                signals["short"] += 1
+                signals["short"] += WEIGHTS["candlestick_moderate"]
                 patterns_str = ", ".join(candlestick_signals["bearish"][:1])
                 reasons["short"].append(f"🕯️ Bearish Pattern: {patterns_str}")
 
-        # === NEW: Confluence Zones ===
-        # Check if price is near support confluence zone (within 2%)
+        # === CONFLUENCE ZONES ===
         if confluence_zones["support"]:
-            nearest_support = confluence_zones["support"][0]  # Already sorted by proximity
+            nearest_support = confluence_zones["support"][0]
             support_distance_pct = (current_price - nearest_support["price"]) / current_price * 100
-            if support_distance_pct < 2:  # Within 2% of support
-                signals["long"] += 2
-                reasons["long"].append(f"🎯 Near Confluence Support ({nearest_support['price']:.0f}, Strength: {nearest_support['strength']} levels)")
+            if support_distance_pct < 2:
+                signals["long"] += WEIGHTS["confluence_zone"]
+                reasons["long"].append(f"🎯 Near Confluence Support (Strength: {nearest_support['strength']})")
 
-        # Check if price is near resistance confluence zone (within 2%)
         if confluence_zones["resistance"]:
-            nearest_resistance = confluence_zones["resistance"][0]  # Already sorted by proximity
+            nearest_resistance = confluence_zones["resistance"][0]
             resist_distance_pct = (nearest_resistance["price"] - current_price) / current_price * 100
-            if resist_distance_pct < 2:  # Within 2% of resistance
-                signals["short"] += 2
-                reasons["short"].append(f"🎯 Near Confluence Resistance ({nearest_resistance['price']:.0f}, Strength: {nearest_resistance['strength']} levels)")
+            if resist_distance_pct < 2:
+                signals["short"] += WEIGHTS["confluence_zone"]
+                reasons["short"].append(f"🎯 Near Confluence Resistance (Strength: {nearest_resistance['strength']})")
 
-        # === WEEKLY TIMEFRAME ANALYSIS ===
+        # === WEEKLY TIMEFRAME ANALYSIS (Highest Weight) ===
         if weekly["EMA_9"] > weekly["EMA_21"]:
-            signals["long"] += 3
+            signals["long"] += WEIGHTS["weekly_trend"]
             reasons["long"].append("📈 Weekly Uptrend: EMA 9 > 21")
         elif weekly["EMA_9"] < weekly["EMA_21"]:
-            signals["short"] += 3
+            signals["short"] += WEIGHTS["weekly_trend"]
             reasons["short"].append("📉 Weekly Downtrend: EMA 9 < 21")
 
+        # Golden/Death Cross (strongest signal)
         if weekly_prev["EMA_9"] <= weekly_prev["EMA_21"] and weekly["EMA_9"] > weekly["EMA_21"]:
-            signals["long"] += 5
+            signals["long"] += WEIGHTS["weekly_cross"]
             reasons["long"].append("🔥 Weekly Golden Cross!")
         elif weekly_prev["EMA_9"] >= weekly_prev["EMA_21"] and weekly["EMA_9"] < weekly["EMA_21"]:
-            signals["short"] += 5
+            signals["short"] += WEIGHTS["weekly_cross"]
             reasons["short"].append("🔥 Weekly Death Cross!")
 
+        # Weekly RSI
         if weekly["RSI"] < 30:
-            signals["long"] += 3
+            signals["long"] += WEIGHTS["weekly_rsi_extreme"]
             reasons["long"].append(f"💪 Weekly RSI Oversold: {weekly['RSI']:.1f}")
         elif weekly["RSI"] < 40:
-            signals["long"] += 2
+            signals["long"] += WEIGHTS["weekly_rsi_moderate"]
             reasons["long"].append(f"📊 Weekly RSI Low: {weekly['RSI']:.1f}")
         elif weekly["RSI"] > 70:
-            signals["short"] += 3
+            signals["short"] += WEIGHTS["weekly_rsi_extreme"]
             reasons["short"].append(f"⚠️ Weekly RSI Overbought: {weekly['RSI']:.1f}")
         elif weekly["RSI"] > 60:
-            signals["short"] += 2
+            signals["short"] += WEIGHTS["weekly_rsi_moderate"]
             reasons["short"].append(f"📊 Weekly RSI High: {weekly['RSI']:.1f}")
         elif 45 < weekly["RSI"] < 55:
             signals["neutral"] += 1
             reasons["neutral"].append(f"😐 Weekly RSI Neutral: {weekly['RSI']:.1f}")
 
+        # Weekly MACD
         if weekly["MACD"] > weekly["MACD_signal"] and weekly["MACD_histogram"] > 0:
-            signals["long"] += 2
+            signals["long"] += WEIGHTS["weekly_macd"]
             reasons["long"].append("📊 Weekly MACD Bullish")
             if weekly["MACD_histogram"] > weekly_prev["MACD_histogram"]:
-                signals["long"] += 1
+                signals["long"] += WEIGHTS["weekly_macd_momentum"]
                 reasons["long"].append("📈 Weekly MACD Momentum Increasing")
         elif weekly["MACD"] < weekly["MACD_signal"] and weekly["MACD_histogram"] < 0:
-            signals["short"] += 2
+            signals["short"] += WEIGHTS["weekly_macd"]
             reasons["short"].append("📊 Weekly MACD Bearish")
             if weekly["MACD_histogram"] < weekly_prev["MACD_histogram"]:
-                signals["short"] += 1
+                signals["short"] += WEIGHTS["weekly_macd_momentum"]
                 reasons["short"].append("📉 Weekly MACD Momentum Decreasing")
 
+        # Weekly StochRSI
         if pd.notna(weekly.get("STOCHRSI_K")):
             if weekly["STOCHRSI_K"] < 20 and weekly["STOCHRSI_D"] < 20:
-                signals["long"] += 2
+                signals["long"] += WEIGHTS["weekly_stochrsi"]
                 reasons["long"].append(f"💪 Weekly StochRSI Oversold: {weekly['STOCHRSI_K']:.1f}")
             elif weekly["STOCHRSI_K"] > 80 and weekly["STOCHRSI_D"] > 80:
-                signals["short"] += 2
+                signals["short"] += WEIGHTS["weekly_stochrsi"]
                 reasons["short"].append(f"⚠️ Weekly StochRSI Overbought: {weekly['STOCHRSI_K']:.1f}")
 
         # === DAILY TIMEFRAME CONFIRMATION ===
         if daily["EMA_9"] > daily["EMA_21"]:
-            signals["long"] += 2
+            signals["long"] += WEIGHTS["daily_trend"]
             reasons["long"].append("📈 Daily Uptrend")
+            # Check for counter-trend warning
+            if weekly["EMA_9"] < weekly["EMA_21"]:
+                signals["neutral"] += abs(WEIGHTS["counter_trend"])
+                reasons["neutral"].append("⚠️ Daily vs Weekly conflict")
         elif daily["EMA_9"] < daily["EMA_21"]:
-            signals["short"] += 2
+            signals["short"] += WEIGHTS["daily_trend"]
             reasons["short"].append("📉 Daily Downtrend")
+            if weekly["EMA_9"] > weekly["EMA_21"]:
+                signals["neutral"] += abs(WEIGHTS["counter_trend"])
+                reasons["neutral"].append("⚠️ Daily vs Weekly conflict")
 
-        # RSI Analysis with Dynamic Thresholds
+        # RSI with Dynamic Thresholds
         rsi_oversold = dynamic_thresholds["rsi_oversold"]
         rsi_overbought = dynamic_thresholds["rsi_overbought"]
         if daily["RSI"] < rsi_oversold:
-            signals["long"] += 3
+            signals["long"] += WEIGHTS["daily_rsi_extreme"]
             reasons["long"].append(f"💪 Daily RSI Oversold: {daily['RSI']:.1f} (< {rsi_oversold:.0f})")
         elif daily["RSI"] > rsi_overbought:
-            signals["short"] += 3
+            signals["short"] += WEIGHTS["daily_rsi_extreme"]
             reasons["short"].append(f"⚠️ Daily RSI Overbought: {daily['RSI']:.1f} (> {rsi_overbought:.0f})")
 
-        # Divergence Detection แบบปรับปรุง
+        # Divergence Detection (weighted by strength)
         daily_divergence, div_strength = self.check_divergence(self.data["daily"], "RSI")
         if daily_divergence == "bullish" and div_strength > 0:
-            # คะแนนตามความแข็งแกร่งของ Divergence
-            div_score = 2 if div_strength < 30 else 3 if div_strength < 60 else 4
-            signals["long"] += div_score
-            reasons["long"].append(f"🔄 Daily Bullish Divergence (Strength: {div_strength:.0f})")
+            if div_strength >= 60:
+                signals["long"] += WEIGHTS["daily_divergence_strong"]
+                reasons["long"].append(f"🔄 Strong Bullish Divergence ({div_strength:.0f})")
+            elif div_strength >= 30:
+                signals["long"] += WEIGHTS["daily_divergence_moderate"]
+                reasons["long"].append(f"🔄 Bullish Divergence ({div_strength:.0f})")
+            else:
+                signals["long"] += WEIGHTS["daily_divergence_weak"]
+                reasons["long"].append(f"🔄 Weak Bullish Divergence ({div_strength:.0f})")
         elif daily_divergence == "bearish" and div_strength > 0:
-            div_score = 2 if div_strength < 30 else 3 if div_strength < 60 else 4
-            signals["short"] += div_score
-            reasons["short"].append(f"🔄 Daily Bearish Divergence (Strength: {div_strength:.0f})")
+            if div_strength >= 60:
+                signals["short"] += WEIGHTS["daily_divergence_strong"]
+                reasons["short"].append(f"🔄 Strong Bearish Divergence ({div_strength:.0f})")
+            elif div_strength >= 30:
+                signals["short"] += WEIGHTS["daily_divergence_moderate"]
+                reasons["short"].append(f"🔄 Bearish Divergence ({div_strength:.0f})")
+            else:
+                signals["short"] += WEIGHTS["daily_divergence_weak"]
+                reasons["short"].append(f"🔄 Weak Bearish Divergence ({div_strength:.0f})")
 
-        # ตรวจสอบ MACD Divergence ด้วย
+        # MACD Divergence
         macd_divergence, macd_div_strength = self.check_divergence(self.data["daily"], "MACD", lookback=20)
         if macd_divergence == "bullish" and macd_div_strength > 20:
-            signals["long"] += 2
+            signals["long"] += WEIGHTS["daily_divergence_weak"]
             reasons["long"].append("🔄 MACD Bullish Divergence")
         elif macd_divergence == "bearish" and macd_div_strength > 20:
-            signals["short"] += 2
+            signals["short"] += WEIGHTS["daily_divergence_weak"]
             reasons["short"].append("🔄 MACD Bearish Divergence")
 
+        # Daily MACD Cross
         if daily_prev["MACD"] <= daily_prev["MACD_signal"] and daily["MACD"] > daily["MACD_signal"]:
-            signals["long"] += 2
+            signals["long"] += WEIGHTS["daily_macd_cross"]
             reasons["long"].append("✅ Daily MACD Cross Up")
         elif daily_prev["MACD"] >= daily_prev["MACD_signal"] and daily["MACD"] < daily["MACD_signal"]:
-            signals["short"] += 2
+            signals["short"] += WEIGHTS["daily_macd_cross"]
             reasons["short"].append("❌ Daily MACD Cross Down")
 
+        # MFI (weight 2)
         if pd.notna(daily.get("MFI")):
             if daily["MFI"] < 20:
                 signals["long"] += 2
@@ -1302,6 +1431,7 @@ class WeeklyTradingStrategy:
                 signals["short"] += 2
                 reasons["short"].append(f"💰 Daily MFI Overbought: {daily['MFI']:.1f}")
 
+        # CCI (weight 1)
         if pd.notna(daily.get("CCI")):
             if daily["CCI"] < -100:
                 signals["long"] += 1
@@ -1310,35 +1440,36 @@ class WeeklyTradingStrategy:
                 signals["short"] += 1
                 reasons["short"].append(f"📊 Daily CCI Overbought: {daily['CCI']:.1f}")
 
-        # === 4H TIMEFRAME ===
+        # === 4H TIMEFRAME (Lowest Weight) ===
         if h4["EMA_9"] > h4["EMA_21"]:
-            signals["long"] += 1
+            signals["long"] += WEIGHTS["h4_trend"]
             reasons["long"].append("📊 4H Aligned Bullish")
         elif h4["EMA_9"] < h4["EMA_21"]:
-            signals["short"] += 1
+            signals["short"] += WEIGHTS["h4_trend"]
             reasons["short"].append("📊 4H Aligned Bearish")
 
         if pd.notna(h4.get("SUPERTREND_DIR")):
             if h4["SUPERTREND_DIR"] == 1:
-                signals["long"] += 2
+                signals["long"] += WEIGHTS["h4_supertrend"]
                 reasons["long"].append("🚀 4H Supertrend Bullish")
             else:
-                signals["short"] += 2
+                signals["short"] += WEIGHTS["h4_supertrend"]
                 reasons["short"].append("🔻 4H Supertrend Bearish")
 
-        # === TREND STRENGTH ===
+        # === ADX TREND STRENGTH ===
         if daily["ADX"] > 25:
             if daily["DI_plus"] > daily["DI_minus"]:
-                signals["long"] += 2
+                signals["long"] += WEIGHTS["adx_strong"]
                 reasons["long"].append(f"💪 Strong Uptrend (ADX: {daily['ADX']:.1f})")
             else:
-                signals["short"] += 2
+                signals["short"] += WEIGHTS["adx_strong"]
                 reasons["short"].append(f"💪 Strong Downtrend (ADX: {daily['ADX']:.1f})")
         elif daily["ADX"] < 20:
-            signals["neutral"] += 2
-            reasons["neutral"].append(f"🌊 Weak Trend (ADX: {daily['ADX']:.1f})")
+            # ADX weak reduces confidence
+            signals["neutral"] += abs(WEIGHTS["adx_weak"])
+            reasons["neutral"].append(f"🌊 Weak Trend - Low Confidence (ADX: {daily['ADX']:.1f})")
 
-        # === VOLUME CONFIRMATION ===
+        # === VOLUME ANALYSIS ===
         if daily["Volume_Ratio"] > 1.5:
             if daily["IS_BULLISH"]:
                 signals["long"] += 2
@@ -1350,20 +1481,20 @@ class WeeklyTradingStrategy:
         if pd.notna(daily.get("OBV")) and pd.notna(daily.get("OBV_EMA")):
             if daily["OBV"] > daily["OBV_EMA"]:
                 signals["long"] += 1
-                reasons["long"].append("📈 OBV Above Average (Accumulation)")
+                reasons["long"].append("📈 OBV Accumulation")
             else:
                 signals["short"] += 1
-                reasons["short"].append("📉 OBV Below Average (Distribution)")
+                reasons["short"].append("📉 OBV Distribution")
 
         # === BOLLINGER BANDS ===
         if daily["close"] < daily["BB_lower"]:
-            signals["long"] += 1
+            signals["long"] += 2
             reasons["long"].append("📉 Price below BB Lower (Oversold)")
         elif daily["close"] > daily["BB_upper"]:
-            signals["short"] += 1
+            signals["short"] += 2
             reasons["short"].append("📈 Price above BB Upper (Overbought)")
 
-        # === ICHIMOKU ===
+        # === ICHIMOKU (weight 2 for cloud, 1 for TK cross) ===
         if pd.notna(daily.get("ICHI_TENKAN")) and pd.notna(daily.get("ICHI_KIJUN")):
             if daily["close"] > daily["ICHI_SENKOU_A"] and daily["close"] > daily["ICHI_SENKOU_B"]:
                 signals["long"] += 2
