@@ -319,13 +319,11 @@ class EmailNotifier:
         # Signal percentages
         long_match = re.search(r"LONG Signals: (\d+) \(([0-9.]+)%\)", text)
         short_match = re.search(r"SHORT Signals: (\d+) \(([0-9.]+)%\)", text)
-        neutral_match = re.search(r"NEUTRAL Signals: (\d+) \(([0-9.]+)%\)", text)
 
         long_count = int(long_match.group(1)) if long_match else 0
         long_pct = float(long_match.group(2)) if long_match else 0
         short_count = int(short_match.group(1)) if short_match else 0
         short_pct = float(short_match.group(2)) if short_match else 0
-        neutral_count = int(neutral_match.group(1)) if neutral_match else 0
 
         # Recommendation
         recommendation = "WAIT"
@@ -363,8 +361,8 @@ class EmailNotifier:
         # Weekly/Daily indicators
         ema_match = re.search(r"EMA 9/21: \$([0-9,]+\.[0-9]+) / \$([0-9,]+\.[0-9]+)", text)
         if ema_match:
-            ema9 = ema_match.group(1)
-            ema21 = ema_match.group(2)
+            indicators.append(("EMA 9", f"${ema_match.group(1)}", "blue"))
+            indicators.append(("EMA 21", f"${ema_match.group(2)}", "blue"))
 
         rsi_match = re.search(r"RSI: ([0-9.]+)", text)
         if rsi_match:
