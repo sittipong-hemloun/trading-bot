@@ -55,9 +55,10 @@ class WeeklyTradingStrategy(BaseStrategy):
             print("❌ ไม่สามารถดึงข้อมูลได้")
             return None
 
-        self.data["weekly"] = self.calculate_indicators(weekly_data)
-        self.data["daily"] = self.calculate_indicators(daily_data)
-        self.data["h4"] = self.calculate_indicators(h4_data)
+        # Calculate indicators with timeframe-specific parameters
+        self.data["weekly"] = self.calculate_indicators(weekly_data, timeframe="weekly")
+        self.data["daily"] = self.calculate_indicators(daily_data, timeframe="daily")
+        self.data["h4"] = self.calculate_indicators(h4_data, timeframe="h4")
 
         return True
 
@@ -123,8 +124,9 @@ class WeeklyTradingStrategy(BaseStrategy):
         daily_prev = self.data["daily"].iloc[-2]
 
         # วิเคราะห์ Market Regime และ Historical Performance
+        # Weekly trading needs longer lookback (100 days = ~14 weeks of data)
         market_regime = self.detect_market_regime(self.data["daily"])
-        historical_perf = self.analyze_historical_performance(self.data["daily"])
+        historical_perf = self.analyze_historical_performance(self.data["daily"], lookback=100)
         trend_consistency = self.check_trend_consistency()
 
         # === Advanced Analysis ===
@@ -708,8 +710,27 @@ class WeeklyTradingStrategy(BaseStrategy):
                 signals["short"] += 1
                 reasons["short"].append("📊 Ichimoku TK Cross Bearish")
 
-        # === NEW: Add Advanced Analysis Summary ===
-        # Calculate overall signal direction for risk score
+        # === WEEKLY ENTRY TIMING ===
+        # Avoid entering on Monday (gap risk) and Friday (weekend risk)
+        # Best entry days: Tuesday, Wednesday, Thursday
+        current_day = daily["timestamp"].dayofweek  # 0=Mon, 4=Fri
+        day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+        entry_timing_penalty = 0
+        if current_day == 0:  # Monday
+            entry_timing_penalty = 2
+            reasons["neutral"].append("⚠️ Monday: Gap risk - consider waiting for Tuesday")
+        elif current_day == 4:  # Friday
+            entry_timing_penalty = 2
+            reasons["neutral"].append("⚠️ Friday: Weekend risk - consider waiting for next week")
+        elif current_day in [1, 2, 3]:  # Tue, Wed, Thu
+            reasons["neutral"].append(f"✅ {day_names[current_day]}: Good entry day for weekly trades")
+
+        # Apply timing penalty to reduce signal strength on bad days
+        if entry_timing_penalty > 0:
+            signals["neutral"] += entry_timing_penalty
+
+        # === Calculate Risk Score ===
         signal_type = "LONG" if signals["long"] > signals["short"] else "SHORT" if signals["short"] > signals["long"] else "NEUTRAL"
         risk_score = self.calculate_risk_score(self.data["daily"], signal_type)
 
@@ -747,42 +768,45 @@ class WeeklyTradingStrategy(BaseStrategy):
 
         atr_percent = daily["ATR_percent"]
 
-        # ปรับ Multipliers ตาม Market Regime
+        # === WEEKLY TRADING: WIDER SL/TP MULTIPLIERS ===
+        # Weekly trades hold 5-7 days, need wider stops to avoid noise
+        # Base multipliers are 1.5-2x larger than daily trading
+
         regime = market_regime["regime"]
         if regime in ["STRONG_UPTREND", "STRONG_DOWNTREND"]:
-            # Trending market - wider stops, bigger targets
+            # Strong trending market - widest stops, biggest targets
             if atr_percent > 5:
-                sl_multiplier = 2.5
-                tp_multiplier = [3, 5, 8]
+                sl_multiplier = 4.0    # Was 2.5
+                tp_multiplier = [4, 7, 12]  # Was [3, 5, 8]
             elif atr_percent > 3:
-                sl_multiplier = 2.0
-                tp_multiplier = [2.5, 4, 6]
+                sl_multiplier = 3.5    # Was 2.0
+                tp_multiplier = [3.5, 6, 10]  # Was [2.5, 4, 6]
             else:
-                sl_multiplier = 1.5
-                tp_multiplier = [2, 3, 5]
+                sl_multiplier = 3.0    # Was 1.5
+                tp_multiplier = [3, 5, 8]  # Was [2, 3, 5]
         elif regime == "HIGH_VOLATILITY":
-            # High volatility - wider stops
+            # High volatility - extra wide stops to survive swings
             if atr_percent > 5:
-                sl_multiplier = 3.0
-                tp_multiplier = [2, 3, 4]
+                sl_multiplier = 5.0    # Was 3.0
+                tp_multiplier = [3, 5, 7]  # Was [2, 3, 4]
             else:
-                sl_multiplier = 2.5
-                tp_multiplier = [1.5, 2.5, 3.5]
+                sl_multiplier = 4.0    # Was 2.5
+                tp_multiplier = [2.5, 4, 6]  # Was [1.5, 2.5, 3.5]
         elif regime == "CONSOLIDATION":
-            # Consolidation - tighter stops
-            sl_multiplier = 1.0
-            tp_multiplier = [1.2, 2, 2.5]
+            # Consolidation - moderate stops (weekly still needs room)
+            sl_multiplier = 2.5    # Was 1.0
+            tp_multiplier = [2, 3, 4]  # Was [1.2, 2, 2.5]
         else:
-            # Default
+            # Default/Ranging
             if atr_percent > 5:
-                sl_multiplier = 2.0
-                tp_multiplier = [2.5, 4, 6]
+                sl_multiplier = 3.5    # Was 2.0
+                tp_multiplier = [3.5, 6, 10]  # Was [2.5, 4, 6]
             elif atr_percent > 3:
-                sl_multiplier = 1.5
-                tp_multiplier = [2, 3, 4]
+                sl_multiplier = 3.0    # Was 1.5
+                tp_multiplier = [3, 5, 7]  # Was [2, 3, 4]
             else:
-                sl_multiplier = 1.2
-                tp_multiplier = [1.5, 2.5, 3.5]
+                sl_multiplier = 2.5    # Was 1.2
+                tp_multiplier = [2.5, 4, 6]  # Was [1.5, 2.5, 3.5]
 
         # Extract Fibonacci extension levels for targets
         fib_ext_127 = fib_levels.get("127.2%")

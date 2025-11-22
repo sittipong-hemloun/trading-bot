@@ -8,45 +8,90 @@ import numpy as np
 import pandas_ta as ta
 
 
-def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """คำนวณตัวชี้วัดแบบครบถ้วน"""
+def calculate_indicators(
+    df: pd.DataFrame,
+    timeframe: str = "daily"
+) -> pd.DataFrame:
+    """
+    คำนวณตัวชี้วัดแบบครบถ้วน พร้อมปรับ parameters ตาม timeframe
+
+    Args:
+        df: DataFrame with OHLCV data
+        timeframe: "weekly", "daily", or "h4" - affects indicator parameters
+
+    Weekly uses shorter periods because each candle = 1 week:
+    - RSI: 7 (vs 14 for daily) = ~7 weeks lookback
+    - MACD: 8/17/9 (vs 12/26/9) = faster response
+    - StochRSI: 7 (vs 14)
+    """
     from trading.patterns import detect_candlestick_patterns
 
-    # === MOVING AVERAGES ===
+    # === PARAMETER CONFIGURATION BY TIMEFRAME ===
+    if timeframe == "weekly":
+        # Weekly: shorter periods (each candle = 1 week)
+        rsi_length = 7
+        macd_fast, macd_slow, macd_signal = 8, 17, 9
+        stochrsi_length = 7
+        stoch_k = 7
+        bb_length = 10
+        adx_length = 7
+        atr_length = 7
+    elif timeframe == "h4":
+        # 4H: standard periods
+        rsi_length = 14
+        macd_fast, macd_slow, macd_signal = 12, 26, 9
+        stochrsi_length = 14
+        stoch_k = 14
+        bb_length = 20
+        adx_length = 14
+        atr_length = 14
+    else:
+        # Daily: standard periods (default)
+        rsi_length = 14
+        macd_fast, macd_slow, macd_signal = 12, 26, 9
+        stochrsi_length = 14
+        stoch_k = 14
+        bb_length = 20
+        adx_length = 14
+        atr_length = 14
+
+    # === MOVING AVERAGES (same for all timeframes) ===
     df["EMA_9"] = ta.ema(df["close"], length=9)
     df["EMA_21"] = ta.ema(df["close"], length=21)
     df["EMA_50"] = ta.ema(df["close"], length=50)
     df["SMA_50"] = ta.sma(df["close"], length=50)
     df["SMA_200"] = ta.sma(df["close"], length=200)
 
-    # === RSI ===
-    df["RSI"] = ta.rsi(df["close"], length=14)
+    # === RSI (adjusted by timeframe) ===
+    df["RSI"] = ta.rsi(df["close"], length=rsi_length)
     # RSI Smoothed (EMA of RSI) - ลด noise
     df["RSI_smoothed"] = ta.ema(df["RSI"], length=3)
 
-    # === MACD ===
-    macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
-    df["MACD"] = macd["MACD_12_26_9"]
-    df["MACD_signal"] = macd["MACDs_12_26_9"]
-    df["MACD_histogram"] = macd["MACDh_12_26_9"]
+    # === MACD (adjusted by timeframe) ===
+    macd = ta.macd(df["close"], fast=macd_fast, slow=macd_slow, signal=macd_signal)
+    macd_col = f"MACD_{macd_fast}_{macd_slow}_{macd_signal}"
+    df["MACD"] = macd[macd_col]
+    df["MACD_signal"] = macd[f"MACDs_{macd_fast}_{macd_slow}_{macd_signal}"]
+    df["MACD_histogram"] = macd[f"MACDh_{macd_fast}_{macd_slow}_{macd_signal}"]
     # MACD Histogram change - ตรวจจับ momentum shift
     df["MACD_hist_change"] = df["MACD_histogram"] - df["MACD_histogram"].shift(1)
 
-    # === Stochastic RSI ===
-    stochrsi = ta.stochrsi(df["close"], length=14, rsi_length=14, k=3, d=3)
-    df["STOCHRSI_K"] = stochrsi["STOCHRSIk_14_14_3_3"]
-    df["STOCHRSI_D"] = stochrsi["STOCHRSId_14_14_3_3"]
+    # === Stochastic RSI (adjusted by timeframe) ===
+    stochrsi = ta.stochrsi(df["close"], length=stochrsi_length, rsi_length=stochrsi_length, k=3, d=3)
+    stochrsi_col = f"STOCHRSIk_{stochrsi_length}_{stochrsi_length}_3_3"
+    df["STOCHRSI_K"] = stochrsi[stochrsi_col]
+    df["STOCHRSI_D"] = stochrsi[f"STOCHRSId_{stochrsi_length}_{stochrsi_length}_3_3"]
 
-    # === Stochastic ===
-    stoch = ta.stoch(df["high"], df["low"], df["close"], k=14, d=3)
-    df["STOCH_K"] = stoch["STOCHk_14_3_3"]
-    df["STOCH_D"] = stoch["STOCHd_14_3_3"]
+    # === Stochastic (adjusted by timeframe) ===
+    stoch = ta.stoch(df["high"], df["low"], df["close"], k=stoch_k, d=3)
+    df["STOCH_K"] = stoch[f"STOCHk_{stoch_k}_3_3"]
+    df["STOCH_D"] = stoch[f"STOCHd_{stoch_k}_3_3"]
 
-    # === Bollinger Bands ===
-    bbands = ta.bbands(df["close"], length=20, std=2.0)  # type: ignore[arg-type]
-    df["BB_upper"] = bbands["BBU_20_2.0_2.0"]
-    df["BB_middle"] = bbands["BBM_20_2.0_2.0"]
-    df["BB_lower"] = bbands["BBL_20_2.0_2.0"]
+    # === Bollinger Bands (adjusted by timeframe) ===
+    bbands = ta.bbands(df["close"], length=bb_length, std=2.0)  # type: ignore[arg-type]
+    df["BB_upper"] = bbands[f"BBU_{bb_length}_2.0_2.0"]
+    df["BB_middle"] = bbands[f"BBM_{bb_length}_2.0_2.0"]
+    df["BB_lower"] = bbands[f"BBL_{bb_length}_2.0_2.0"]
     df["BB_width"] = (df["BB_upper"] - df["BB_lower"]) / df["BB_middle"] * 100
     # ป้องกัน division by zero
     bb_range = df["BB_upper"] - df["BB_lower"]
@@ -56,14 +101,14 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
         0.5  # กลางกรณี bands แคบมาก
     )
 
-    # === ADX (Trend Strength) ===
-    adx = ta.adx(df["high"], df["low"], df["close"], length=14)
-    df["ADX"] = adx["ADX_14"]
-    df["DI_plus"] = adx["DMP_14"]
-    df["DI_minus"] = adx["DMN_14"]
+    # === ADX (Trend Strength) - adjusted by timeframe ===
+    adx = ta.adx(df["high"], df["low"], df["close"], length=adx_length)
+    df["ADX"] = adx[f"ADX_{adx_length}"]
+    df["DI_plus"] = adx[f"DMP_{adx_length}"]
+    df["DI_minus"] = adx[f"DMN_{adx_length}"]
 
-    # === ATR ===
-    df["ATR"] = ta.atr(df["high"], df["low"], df["close"], length=14)
+    # === ATR - adjusted by timeframe ===
+    df["ATR"] = ta.atr(df["high"], df["low"], df["close"], length=atr_length)
     df["ATR_percent"] = df["ATR"] / df["close"] * 100
 
     # === Volume Analysis ===
@@ -160,7 +205,7 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
         ((df["close"] - df["low"]) - (df["high"] - df["close"])) / (df["high"] - df["low"]),
         0
     )
-    mf_volume = mf_multiplier * df["volume"]
+    mf_volume = pd.Series(mf_multiplier, index=df.index) * df["volume"]
     df["CMF"] = mf_volume.rolling(window=20).sum() / df["volume"].rolling(window=20).sum()
 
     # === Volume Profile Approximation (VAH, VAL) ===

@@ -80,17 +80,22 @@ class BaseStrategy(ABC):
 
     # === INDICATOR CALCULATIONS ===
 
-    def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+    def calculate_indicators(
+        self,
+        df: pd.DataFrame,
+        timeframe: str = "daily"
+    ) -> pd.DataFrame:
         """
         Calculate all technical indicators
 
         Args:
             df: DataFrame with OHLCV data
+            timeframe: "weekly", "daily", or "h4" for parameter adjustment
 
         Returns:
             DataFrame with calculated indicators
         """
-        return calculate_indicators(df)
+        return calculate_indicators(df, timeframe=timeframe)
 
     # === PATTERN DETECTION ===
 
