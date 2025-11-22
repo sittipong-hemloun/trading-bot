@@ -109,7 +109,11 @@ class WeeklyTradingStrategy:
         df["MFI"] = ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=14)
 
         # === CCI (Commodity Channel Index) - เพิ่มใหม่ ===
-        df["CCI"] = ta.cci(df["high"], df["low"], df["close"], length=20)
+        # Manual calculation because pandas_ta CCI has issues with high-priced assets
+        typical_price = (df["high"] + df["low"] + df["close"]) / 3
+        sma_tp = typical_price.rolling(20).mean()
+        mean_dev = abs(typical_price - sma_tp).rolling(20).mean()
+        df["CCI"] = (typical_price - sma_tp) / (0.015 * mean_dev)
 
         # === Williams %R - เพิ่มใหม่ ===
         df["WILLR"] = ta.willr(df["high"], df["low"], df["close"], length=14)
@@ -123,7 +127,9 @@ class WeeklyTradingStrategy:
             df["ICHI_SENKOU_B"] = ichimoku[0]["ISB_26"]
 
         # === VWAP (Volume Weighted Average Price) - เพิ่มใหม่ ===
-        df["VWAP"] = ta.vwap(df["high"], df["low"], df["close"], df["volume"])
+        # VWAP requires DatetimeIndex, so we calculate manually
+        typical_price_vwap = (df["high"] + df["low"] + df["close"]) / 3
+        df["VWAP"] = (typical_price_vwap * df["volume"]).cumsum() / df["volume"].cumsum()
 
         # === Supertrend - เพิ่มใหม่ ===
         supertrend = ta.supertrend(df["high"], df["low"], df["close"], length=10, multiplier=3.0)
@@ -810,7 +816,7 @@ class WeeklyTradingStrategy:
             print(f"  {marker} {level}: ${price:,.2f}")
 
         action = "Long" if signal_type == "LONG" else "Short"
-        print(f"\n📅 WEEKLY STRATEGY:")
+        print("\n📅 WEEKLY STRATEGY:")
         print(f"  1️⃣ เปิด {action} ที่ราคาปัจจุบัน ${entry:,.2f}")
         print(f"  2️⃣ ตั้ง Stop Loss ที่ ${sl:,.2f}")
         print("  3️⃣ ปิด 40% ที่ TP1, 30% ที่ TP2, 30% ที่ TP3")
@@ -1372,7 +1378,7 @@ class MonthlyTradingStrategy:
             print(f"  {marker} {level}: ${price:,.2f}")
 
         action = "Long" if signal_type == "LONG" else "Short"
-        print(f"\n📅 MONTHLY STRATEGY:")
+        print("\n📅 MONTHLY STRATEGY:")
         print(f"  1️⃣ เปิด {action} ที่ราคาปัจจุบัน ${entry:,.2f}")
         print(f"  2️⃣ ตั้ง Stop Loss ที่ ${sl:,.2f}")
         print("  3️⃣ ปิด 33% ที่ TP1, 33% ที่ TP2, 34% ที่ TP3")
