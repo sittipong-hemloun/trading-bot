@@ -256,25 +256,46 @@ class WeeklyTradingStrategy:
         df["CCI"] = (typical_price - sma_tp) / (0.015 * mean_dev)
 
         # === Williams %R ===
-        df["WILLR"] = ta.willr(df["high"], df["low"], df["close"], length=14)
+        willr = ta.willr(df["high"], df["low"], df["close"], length=14)
+        df["WILLR"] = willr if willr is not None else -50.0
 
-        # === Ichimoku Cloud ===
-        ichimoku = ta.ichimoku(df["high"], df["low"], df["close"])
-        if ichimoku is not None and len(ichimoku) >= 2:
-            df["ICHI_TENKAN"] = ichimoku[0]["ITS_9"]
-            df["ICHI_KIJUN"] = ichimoku[0]["IKS_26"]
-            df["ICHI_SENKOU_A"] = ichimoku[0]["ISA_9"]
-            df["ICHI_SENKOU_B"] = ichimoku[0]["ISB_26"]
+        # === Ichimoku Cloud (with safety check) ===
+        try:
+            ichimoku = ta.ichimoku(df["high"], df["low"], df["close"])
+            if ichimoku is not None and len(ichimoku) >= 2 and ichimoku[0] is not None:
+                df["ICHI_TENKAN"] = ichimoku[0]["ITS_9"]
+                df["ICHI_KIJUN"] = ichimoku[0]["IKS_26"]
+                df["ICHI_SENKOU_A"] = ichimoku[0]["ISA_9"]
+                df["ICHI_SENKOU_B"] = ichimoku[0]["ISB_26"]
+            else:
+                df["ICHI_TENKAN"] = df["close"]
+                df["ICHI_KIJUN"] = df["close"]
+                df["ICHI_SENKOU_A"] = df["close"]
+                df["ICHI_SENKOU_B"] = df["close"]
+        except Exception:
+            df["ICHI_TENKAN"] = df["close"]
+            df["ICHI_KIJUN"] = df["close"]
+            df["ICHI_SENKOU_A"] = df["close"]
+            df["ICHI_SENKOU_B"] = df["close"]
 
         # === VWAP (Volume Weighted Average Price) ===
         # VWAP requires DatetimeIndex, so we calculate manually
         typical_price_vwap = (df["high"] + df["low"] + df["close"]) / 3
-        df["VWAP"] = (typical_price_vwap * df["volume"]).cumsum() / df["volume"].cumsum()
+        vol_cumsum = df["volume"].cumsum().replace(0, 1)  # Avoid division by zero
+        df["VWAP"] = (typical_price_vwap * df["volume"]).cumsum() / vol_cumsum
 
-        # === Supertrend ===
-        supertrend = ta.supertrend(df["high"], df["low"], df["close"], length=10, multiplier=3.0)
-        df["SUPERTREND"] = supertrend["SUPERT_10_3.0"]
-        df["SUPERTREND_DIR"] = supertrend["SUPERTd_10_3.0"]
+        # === Supertrend (with safety check) ===
+        try:
+            supertrend = ta.supertrend(df["high"], df["low"], df["close"], length=10, multiplier=3.0)
+            if supertrend is not None and not supertrend.empty:
+                df["SUPERTREND"] = supertrend["SUPERT_10_3.0"]
+                df["SUPERTREND_DIR"] = supertrend["SUPERTd_10_3.0"]
+            else:
+                df["SUPERTREND"] = df["close"]
+                df["SUPERTREND_DIR"] = 1
+        except Exception:
+            df["SUPERTREND"] = df["close"]
+            df["SUPERTREND_DIR"] = 1
 
         # === Pivot Points ===
         df["PIVOT"] = (df["high"].shift(1) + df["low"].shift(1) + df["close"].shift(1)) / 3
@@ -296,9 +317,11 @@ class WeeklyTradingStrategy:
         df["IS_BULLISH"] = df["close"] > df["open"]
         df["IS_BEARISH"] = df["close"] < df["open"]
 
-        # === Momentum ===
-        df["ROC"] = ta.roc(df["close"], length=10)
-        df["MOM"] = ta.mom(df["close"], length=10)
+        # === Momentum (with safety check) ===
+        roc = ta.roc(df["close"], length=10)
+        df["ROC"] = roc if roc is not None else 0.0
+        mom = ta.mom(df["close"], length=10)
+        df["MOM"] = mom if mom is not None else 0.0
 
         return df
 
