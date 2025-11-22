@@ -603,6 +603,170 @@ class TestIntegration:
 
 # ==================== Edge Case Tests ====================
 
+# ==================== New Feature Tests ====================
+
+class TestMultiIndicatorConfirmation:
+    """Test Multi-Indicator Confirmation System"""
+
+    def test_get_multi_indicator_confirmation_returns_dict(self, weekly_strategy, sample_data_with_indicators):
+        """Test that multi-indicator confirmation returns a dictionary"""
+        result = weekly_strategy.get_multi_indicator_confirmation(sample_data_with_indicators)
+        assert isinstance(result, dict)
+
+    def test_get_multi_indicator_confirmation_has_required_keys(self, weekly_strategy, sample_data_with_indicators):
+        """Test that result has all required keys"""
+        result = weekly_strategy.get_multi_indicator_confirmation(sample_data_with_indicators)
+        required_keys = ["direction", "strength", "confirmations", "details"]
+        for key in required_keys:
+            assert key in result
+
+    def test_get_multi_indicator_confirmation_valid_direction(self, weekly_strategy, sample_data_with_indicators):
+        """Test that direction is a valid value"""
+        result = weekly_strategy.get_multi_indicator_confirmation(sample_data_with_indicators)
+        valid_directions = ["bullish", "bearish", "neutral"]
+        assert result["direction"] in valid_directions
+
+    def test_get_multi_indicator_confirmation_confirmations_bounded(self, weekly_strategy, sample_data_with_indicators):
+        """Test that confirmations is between 0 and 6"""
+        result = weekly_strategy.get_multi_indicator_confirmation(sample_data_with_indicators)
+        assert 0 <= result["confirmations"] <= 6
+
+
+class TestVolumeConfirmation:
+    """Test Volume Confirmation System"""
+
+    def test_get_volume_confirmation_returns_dict(self, weekly_strategy, sample_data_with_indicators):
+        """Test that volume confirmation returns a dictionary"""
+        result = weekly_strategy.get_volume_confirmation(sample_data_with_indicators)
+        assert isinstance(result, dict)
+
+    def test_get_volume_confirmation_has_required_keys(self, weekly_strategy, sample_data_with_indicators):
+        """Test that result has all required keys"""
+        result = weekly_strategy.get_volume_confirmation(sample_data_with_indicators)
+        required_keys = ["confirmed", "volume_ratio", "obv_trend", "details"]
+        for key in required_keys:
+            assert key in result
+
+    def test_get_volume_confirmation_confirmed_boolean(self, weekly_strategy, sample_data_with_indicators):
+        """Test that confirmed is a boolean"""
+        result = weekly_strategy.get_volume_confirmation(sample_data_with_indicators)
+        assert isinstance(result["confirmed"], bool)
+
+    def test_get_volume_confirmation_volume_ratio_positive(self, weekly_strategy, sample_data_with_indicators):
+        """Test that volume ratio is positive"""
+        result = weekly_strategy.get_volume_confirmation(sample_data_with_indicators)
+        assert result["volume_ratio"] >= 0
+
+
+class TestCandlestickPatterns:
+    """Test Candlestick Pattern Detection"""
+
+    def test_get_candlestick_signals_returns_dict(self, weekly_strategy, sample_data_with_indicators):
+        """Test that candlestick signals returns a dictionary"""
+        result = weekly_strategy.get_candlestick_signals(sample_data_with_indicators)
+        assert isinstance(result, dict)
+
+    def test_get_candlestick_signals_has_required_keys(self, weekly_strategy, sample_data_with_indicators):
+        """Test that result has all required keys"""
+        result = weekly_strategy.get_candlestick_signals(sample_data_with_indicators)
+        required_keys = ["bullish", "bearish", "score"]
+        for key in required_keys:
+            assert key in result
+
+    def test_get_candlestick_signals_patterns_are_lists(self, weekly_strategy, sample_data_with_indicators):
+        """Test that patterns are lists"""
+        result = weekly_strategy.get_candlestick_signals(sample_data_with_indicators)
+        assert isinstance(result["bullish"], list)
+        assert isinstance(result["bearish"], list)
+
+    def test_get_candlestick_signals_score_is_int(self, weekly_strategy, sample_data_with_indicators):
+        """Test that score is an integer"""
+        result = weekly_strategy.get_candlestick_signals(sample_data_with_indicators)
+        assert isinstance(result["score"], int)
+
+
+class TestDynamicThresholds:
+    """Test Dynamic Threshold System"""
+
+    def test_get_dynamic_thresholds_returns_dict(self, weekly_strategy, sample_data_with_indicators):
+        """Test that dynamic thresholds returns a dictionary"""
+        result = weekly_strategy.get_dynamic_thresholds(sample_data_with_indicators)
+        assert isinstance(result, dict)
+
+    def test_get_dynamic_thresholds_has_required_keys(self, weekly_strategy, sample_data_with_indicators):
+        """Test that result has all required keys"""
+        result = weekly_strategy.get_dynamic_thresholds(sample_data_with_indicators)
+        required_keys = ["rsi_oversold", "rsi_overbought", "volume_threshold"]
+        for key in required_keys:
+            assert key in result
+
+    def test_get_dynamic_thresholds_rsi_bounds_valid(self, weekly_strategy, sample_data_with_indicators):
+        """Test that RSI thresholds are within valid bounds"""
+        result = weekly_strategy.get_dynamic_thresholds(sample_data_with_indicators)
+        # Oversold should be less than overbought
+        assert result["rsi_oversold"] < result["rsi_overbought"]
+        # Oversold should be between 20-40, overbought between 60-80
+        assert 15 <= result["rsi_oversold"] <= 45
+        assert 55 <= result["rsi_overbought"] <= 85
+
+
+class TestConfluenceZones:
+    """Test Confluence Zones Detection"""
+
+    def test_find_confluence_zones_returns_dict(self, weekly_strategy, sample_data_with_indicators):
+        """Test that confluence zones returns a dictionary"""
+        current_price = sample_data_with_indicators["close"].iloc[-1]
+        result = weekly_strategy.find_confluence_zones(sample_data_with_indicators, current_price)
+        assert isinstance(result, dict)
+
+    def test_find_confluence_zones_has_required_keys(self, weekly_strategy, sample_data_with_indicators):
+        """Test that result has support and resistance keys"""
+        current_price = sample_data_with_indicators["close"].iloc[-1]
+        result = weekly_strategy.find_confluence_zones(sample_data_with_indicators, current_price)
+        assert "support" in result
+        assert "resistance" in result
+
+    def test_find_confluence_zones_returns_lists(self, weekly_strategy, sample_data_with_indicators):
+        """Test that support and resistance are lists"""
+        current_price = sample_data_with_indicators["close"].iloc[-1]
+        result = weekly_strategy.find_confluence_zones(sample_data_with_indicators, current_price)
+        assert isinstance(result["support"], list)
+        assert isinstance(result["resistance"], list)
+
+
+class TestRiskScore:
+    """Test Risk Score Calculation"""
+
+    def test_calculate_risk_score_returns_dict(self, weekly_strategy, sample_data_with_indicators):
+        """Test that risk score returns a dictionary"""
+        result = weekly_strategy.calculate_risk_score(sample_data_with_indicators, "LONG")
+        assert isinstance(result, dict)
+
+    def test_calculate_risk_score_has_required_keys(self, weekly_strategy, sample_data_with_indicators):
+        """Test that result has all required keys"""
+        result = weekly_strategy.calculate_risk_score(sample_data_with_indicators, "LONG")
+        required_keys = ["score", "level", "factors"]
+        for key in required_keys:
+            assert key in result
+
+    def test_calculate_risk_score_bounded(self, weekly_strategy, sample_data_with_indicators):
+        """Test that risk score is between 0 and 100"""
+        result = weekly_strategy.calculate_risk_score(sample_data_with_indicators, "LONG")
+        assert 0 <= result["score"] <= 100
+
+    def test_calculate_risk_score_valid_level(self, weekly_strategy, sample_data_with_indicators):
+        """Test that level is a valid value"""
+        result = weekly_strategy.calculate_risk_score(sample_data_with_indicators, "LONG")
+        valid_levels = ["LOW", "MEDIUM", "HIGH"]
+        assert result["level"] in valid_levels
+
+    def test_calculate_risk_score_short_signal(self, weekly_strategy, sample_data_with_indicators):
+        """Test risk score calculation for SHORT signal"""
+        result = weekly_strategy.calculate_risk_score(sample_data_with_indicators, "SHORT")
+        assert isinstance(result, dict)
+        assert 0 <= result["score"] <= 100
+
+
 class TestEdgeCases:
     """Test edge cases and error handling"""
 

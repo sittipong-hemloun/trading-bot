@@ -173,7 +173,502 @@ class WeeklyTradingStrategy:
         df["ROC"] = ta.roc(df["close"], length=10)
         df["MOM"] = ta.mom(df["close"], length=10)
 
+        # === Candlestick Patterns ===
+        df = self._detect_candlestick_patterns(df)
+
         return df
+
+    def _detect_candlestick_patterns(self, df):
+        """ตรวจจับ Candlestick Patterns"""
+        # Calculate candle properties
+        body = abs(df["close"] - df["open"])
+        upper_shadow = df["high"] - df[["close", "open"]].max(axis=1)
+        lower_shadow = df[["close", "open"]].min(axis=1) - df["low"]
+        candle_range = df["high"] - df["low"]
+
+        # Avoid division by zero
+        candle_range = candle_range.replace(0, np.nan)
+
+        # Doji - small body relative to range
+        df["DOJI"] = (body / candle_range) < 0.1
+
+        # Hammer - small body at top, long lower shadow
+        df["HAMMER"] = (
+            (lower_shadow > body * 2) &
+            (upper_shadow < body * 0.5) &
+            (df["close"] > df["open"])  # Bullish
+        )
+
+        # Inverted Hammer
+        df["INVERTED_HAMMER"] = (
+            (upper_shadow > body * 2) &
+            (lower_shadow < body * 0.5) &
+            (df["close"] > df["open"])
+        )
+
+        # Shooting Star - small body at bottom, long upper shadow (bearish)
+        df["SHOOTING_STAR"] = (
+            (upper_shadow > body * 2) &
+            (lower_shadow < body * 0.5) &
+            (df["close"] < df["open"])
+        )
+
+        # Hanging Man - like hammer but at top of uptrend (bearish)
+        df["HANGING_MAN"] = (
+            (lower_shadow > body * 2) &
+            (upper_shadow < body * 0.5) &
+            (df["close"] < df["open"])
+        )
+
+        # Engulfing patterns
+        prev_body = body.shift(1)
+        prev_open = df["open"].shift(1)
+        prev_close = df["close"].shift(1)
+
+        # Bullish Engulfing
+        df["BULLISH_ENGULFING"] = (
+            (df["close"] > df["open"]) &  # Current is bullish
+            (prev_close < prev_open) &  # Previous is bearish
+            (df["open"] < prev_close) &  # Open below previous close
+            (df["close"] > prev_open) &  # Close above previous open
+            (body > prev_body)  # Current body larger
+        )
+
+        # Bearish Engulfing
+        df["BEARISH_ENGULFING"] = (
+            (df["close"] < df["open"]) &  # Current is bearish
+            (prev_close > prev_open) &  # Previous is bullish
+            (df["open"] > prev_close) &  # Open above previous close
+            (df["close"] < prev_open) &  # Close below previous open
+            (body > prev_body)  # Current body larger
+        )
+
+        # Morning Star (3 candle bullish reversal)
+        df["MORNING_STAR"] = (
+            (df["close"].shift(2) < df["open"].shift(2)) &  # First candle bearish
+            (body.shift(1) < body.shift(2) * 0.3) &  # Second candle small
+            (df["close"] > df["open"]) &  # Third candle bullish
+            (df["close"] > (df["open"].shift(2) + df["close"].shift(2)) / 2)  # Close above midpoint of first
+        )
+
+        # Evening Star (3 candle bearish reversal)
+        df["EVENING_STAR"] = (
+            (df["close"].shift(2) > df["open"].shift(2)) &  # First candle bullish
+            (body.shift(1) < body.shift(2) * 0.3) &  # Second candle small
+            (df["close"] < df["open"]) &  # Third candle bearish
+            (df["close"] < (df["open"].shift(2) + df["close"].shift(2)) / 2)  # Close below midpoint of first
+        )
+
+        # Three White Soldiers (strong bullish)
+        df["THREE_WHITE_SOLDIERS"] = (
+            (df["close"] > df["open"]) &
+            (df["close"].shift(1) > df["open"].shift(1)) &
+            (df["close"].shift(2) > df["open"].shift(2)) &
+            (df["close"] > df["close"].shift(1)) &
+            (df["close"].shift(1) > df["close"].shift(2))
+        )
+
+        # Three Black Crows (strong bearish)
+        df["THREE_BLACK_CROWS"] = (
+            (df["close"] < df["open"]) &
+            (df["close"].shift(1) < df["open"].shift(1)) &
+            (df["close"].shift(2) < df["open"].shift(2)) &
+            (df["close"] < df["close"].shift(1)) &
+            (df["close"].shift(1) < df["close"].shift(2))
+        )
+
+        return df
+
+    def get_multi_indicator_confirmation(self, df):
+        """ตรวจสอบการยืนยันจากหลาย Indicators พร้อมกัน"""
+        latest = df.iloc[-1]
+        prev = df.iloc[-2]
+
+        bullish_confirmations = 0
+        bearish_confirmations = 0
+        confirmation_details = {"bullish": [], "bearish": []}
+
+        # 1. Trend Confirmation (EMA alignment)
+        if latest["EMA_9"] > latest["EMA_21"] > latest["EMA_50"]:
+            bullish_confirmations += 1
+            confirmation_details["bullish"].append("EMA Aligned Bullish")
+        elif latest["EMA_9"] < latest["EMA_21"] < latest["EMA_50"]:
+            bearish_confirmations += 1
+            confirmation_details["bearish"].append("EMA Aligned Bearish")
+
+        # 2. Momentum Confirmation (MACD + RSI)
+        macd_bullish = latest["MACD"] > latest["MACD_signal"] and latest["MACD_histogram"] > 0
+        macd_bearish = latest["MACD"] < latest["MACD_signal"] and latest["MACD_histogram"] < 0
+        rsi_bullish = 30 < latest["RSI"] < 70 and latest["RSI"] > prev["RSI"]
+        rsi_bearish = 30 < latest["RSI"] < 70 and latest["RSI"] < prev["RSI"]
+
+        if macd_bullish and rsi_bullish:
+            bullish_confirmations += 1
+            confirmation_details["bullish"].append("MACD+RSI Momentum Bullish")
+        elif macd_bearish and rsi_bearish:
+            bearish_confirmations += 1
+            confirmation_details["bearish"].append("MACD+RSI Momentum Bearish")
+
+        # 3. Trend Strength Confirmation (ADX + DI)
+        if pd.notna(latest.get("ADX")) and latest["ADX"] > 25:
+            if latest["DI_plus"] > latest["DI_minus"]:
+                bullish_confirmations += 1
+                confirmation_details["bullish"].append(f"ADX Strong Uptrend ({latest['ADX']:.0f})")
+            else:
+                bearish_confirmations += 1
+                confirmation_details["bearish"].append(f"ADX Strong Downtrend ({latest['ADX']:.0f})")
+
+        # 4. Supertrend Confirmation
+        if pd.notna(latest.get("SUPERTREND_DIR")):
+            if latest["SUPERTREND_DIR"] == 1:
+                bullish_confirmations += 1
+                confirmation_details["bullish"].append("Supertrend Bullish")
+            else:
+                bearish_confirmations += 1
+                confirmation_details["bearish"].append("Supertrend Bearish")
+
+        # 5. Price vs Cloud (Ichimoku)
+        if pd.notna(latest.get("ICHI_SENKOU_A")) and pd.notna(latest.get("ICHI_SENKOU_B")):
+            cloud_top = max(latest["ICHI_SENKOU_A"], latest["ICHI_SENKOU_B"])
+            cloud_bottom = min(latest["ICHI_SENKOU_A"], latest["ICHI_SENKOU_B"])
+            if latest["close"] > cloud_top:
+                bullish_confirmations += 1
+                confirmation_details["bullish"].append("Above Ichimoku Cloud")
+            elif latest["close"] < cloud_bottom:
+                bearish_confirmations += 1
+                confirmation_details["bearish"].append("Below Ichimoku Cloud")
+
+        # 6. Bollinger Band Position
+        if pd.notna(latest.get("BB_percent")):
+            if latest["BB_percent"] < 0.2:  # Near lower band
+                bullish_confirmations += 1
+                confirmation_details["bullish"].append("Near BB Lower (Oversold)")
+            elif latest["BB_percent"] > 0.8:  # Near upper band
+                bearish_confirmations += 1
+                confirmation_details["bearish"].append("Near BB Upper (Overbought)")
+
+        total = bullish_confirmations + bearish_confirmations
+        if total == 0:
+            return {"direction": "neutral", "strength": 0, "confirmations": 0, "details": []}
+
+        if bullish_confirmations > bearish_confirmations:
+            return {
+                "direction": "bullish",
+                "strength": bullish_confirmations / 6 * 100,
+                "confirmations": bullish_confirmations,
+                "details": confirmation_details["bullish"]
+            }
+        elif bearish_confirmations > bullish_confirmations:
+            return {
+                "direction": "bearish",
+                "strength": bearish_confirmations / 6 * 100,
+                "confirmations": bearish_confirmations,
+                "details": confirmation_details["bearish"]
+            }
+        else:
+            return {"direction": "mixed", "strength": 50, "confirmations": total, "details": []}
+
+    def get_volume_confirmation(self, df, lookback=20):
+        """วิเคราะห์ Volume เพื่อยืนยันสัญญาณ"""
+        latest = df.iloc[-1]
+        recent = df.tail(lookback)
+
+        result = {
+            "confirmed": False,
+            "volume_trend": "neutral",
+            "volume_ratio": latest["Volume_Ratio"] if pd.notna(latest.get("Volume_Ratio")) else 1,
+            "obv_trend": "neutral",
+            "details": []
+        }
+
+        # 1. Volume Breakout
+        if result["volume_ratio"] > 2.0:
+            result["details"].append(f"High Volume Breakout ({result['volume_ratio']:.1f}x)")
+            result["confirmed"] = True
+        elif result["volume_ratio"] > 1.5:
+            result["details"].append(f"Above Average Volume ({result['volume_ratio']:.1f}x)")
+            result["confirmed"] = True
+
+        # 2. Volume Trend (increasing or decreasing)
+        vol_sma_5 = recent["volume"].tail(5).mean()
+        vol_sma_10 = recent["volume"].tail(10).mean()
+        if vol_sma_5 > vol_sma_10 * 1.1:
+            result["volume_trend"] = "increasing"
+            result["details"].append("Volume Trend Increasing")
+        elif vol_sma_5 < vol_sma_10 * 0.9:
+            result["volume_trend"] = "decreasing"
+            result["details"].append("Volume Trend Decreasing")
+
+        # 3. OBV Analysis
+        if pd.notna(latest.get("OBV")) and pd.notna(latest.get("OBV_EMA")):
+            if latest["OBV"] > latest["OBV_EMA"]:
+                result["obv_trend"] = "bullish"
+                result["details"].append("OBV Above Average (Accumulation)")
+            else:
+                result["obv_trend"] = "bearish"
+                result["details"].append("OBV Below Average (Distribution)")
+
+        # 4. Price-Volume Divergence
+        price_up = latest["close"] > df.iloc[-2]["close"]
+        volume_up = latest["volume"] > df.iloc[-2]["volume"]
+
+        if price_up and not volume_up:
+            result["details"].append("Warning: Price Up on Lower Volume")
+        elif not price_up and volume_up:
+            result["details"].append("Warning: Price Down on Higher Volume")
+
+        # 5. MFI Analysis
+        if pd.notna(latest.get("MFI")):
+            if latest["MFI"] < 20:
+                result["details"].append(f"MFI Oversold ({latest['MFI']:.0f})")
+            elif latest["MFI"] > 80:
+                result["details"].append(f"MFI Overbought ({latest['MFI']:.0f})")
+
+        return result
+
+    def find_confluence_zones(self, df, current_price):
+        """หา Confluence Zones - บริเวณที่มีหลาย levels รวมกัน"""
+        zones = {"support": [], "resistance": []}
+        tolerance = current_price * 0.02  # 2% tolerance
+
+        # Collect all significant levels
+        levels = []
+
+        latest = df.iloc[-1]
+
+        # EMAs
+        for ema_col in ["EMA_9", "EMA_21", "EMA_50"]:
+            if pd.notna(latest.get(ema_col)):
+                levels.append({"price": latest[ema_col], "type": "EMA", "name": ema_col})
+
+        # SMAs
+        for sma_col in ["SMA_50", "SMA_200"]:
+            if pd.notna(latest.get(sma_col)):
+                levels.append({"price": latest[sma_col], "type": "SMA", "name": sma_col})
+
+        # Bollinger Bands
+        for bb_col in ["BB_upper", "BB_middle", "BB_lower"]:
+            if pd.notna(latest.get(bb_col)):
+                levels.append({"price": latest[bb_col], "type": "BB", "name": bb_col})
+
+        # Pivot Points
+        for pivot_col in ["PIVOT", "R1", "R2", "S1", "S2"]:
+            if pd.notna(latest.get(pivot_col)):
+                levels.append({"price": latest[pivot_col], "type": "Pivot", "name": pivot_col})
+
+        # VWAP
+        if pd.notna(latest.get("VWAP")):
+            levels.append({"price": latest["VWAP"], "type": "VWAP", "name": "VWAP"})
+
+        # Supertrend
+        if pd.notna(latest.get("SUPERTREND")):
+            levels.append({"price": latest["SUPERTREND"], "type": "Supertrend", "name": "Supertrend"})
+
+        # Ichimoku levels
+        for ichi_col in ["ICHI_TENKAN", "ICHI_KIJUN", "ICHI_SENKOU_A", "ICHI_SENKOU_B"]:
+            if pd.notna(latest.get(ichi_col)):
+                levels.append({"price": latest[ichi_col], "type": "Ichimoku", "name": ichi_col})
+
+        # Find confluence - levels that are close to each other
+        confluence_zones = []
+
+        for i, level1 in enumerate(levels):
+            confluence_count = 1
+            confluence_levels = [level1["name"]]
+            avg_price = level1["price"]
+
+            for j, level2 in enumerate(levels):
+                if i != j and abs(level1["price"] - level2["price"]) < tolerance:
+                    confluence_count += 1
+                    confluence_levels.append(level2["name"])
+                    avg_price = (avg_price + level2["price"]) / 2
+
+            if confluence_count >= 2:  # At least 2 levels together
+                confluence_zones.append({
+                    "price": avg_price,
+                    "strength": confluence_count,
+                    "levels": confluence_levels
+                })
+
+        # Remove duplicates and sort
+        seen_prices = set()
+        unique_zones = []
+        for zone in sorted(confluence_zones, key=lambda x: -x["strength"]):
+            price_key = round(zone["price"] / tolerance) * tolerance
+            if price_key not in seen_prices:
+                seen_prices.add(price_key)
+                if zone["price"] < current_price:
+                    zones["support"].append(zone)
+                else:
+                    zones["resistance"].append(zone)
+                unique_zones.append(zone)
+
+        # Sort by distance from current price
+        zones["support"] = sorted(zones["support"], key=lambda x: -x["price"])[:3]
+        zones["resistance"] = sorted(zones["resistance"], key=lambda x: x["price"])[:3]
+
+        return zones
+
+    def get_dynamic_thresholds(self, df):
+        """คำนวณ Thresholds แบบ Dynamic ตาม Volatility และ Market Regime"""
+        latest = df.iloc[-1]
+        lookback = min(20, len(df) - 1)
+
+        # Current volatility
+        current_atr_pct = latest["ATR_percent"] if pd.notna(latest.get("ATR_percent")) else 3
+        avg_atr_pct = df["ATR_percent"].tail(lookback).mean() if "ATR_percent" in df.columns else 3
+        volatility_ratio = current_atr_pct / avg_atr_pct if avg_atr_pct > 0 else 1
+
+        # Base thresholds
+        base_rsi_oversold = 30
+        base_rsi_overbought = 70
+        base_volume_threshold = 1.5
+
+        # Adjust based on volatility
+        if volatility_ratio > 1.5:  # High volatility
+            rsi_oversold = base_rsi_oversold - 5  # More extreme = 25
+            rsi_overbought = base_rsi_overbought + 5  # = 75
+            volume_threshold = base_volume_threshold + 0.5  # = 2.0
+        elif volatility_ratio < 0.7:  # Low volatility
+            rsi_oversold = base_rsi_oversold + 5  # = 35
+            rsi_overbought = base_rsi_overbought - 5  # = 65
+            volume_threshold = base_volume_threshold - 0.3  # = 1.2
+        else:
+            rsi_oversold = base_rsi_oversold
+            rsi_overbought = base_rsi_overbought
+            volume_threshold = base_volume_threshold
+
+        return {
+            "rsi_oversold": rsi_oversold,
+            "rsi_overbought": rsi_overbought,
+            "volume_threshold": volume_threshold,
+            "volatility_ratio": volatility_ratio,
+            "sl_multiplier": 1.5 + (volatility_ratio - 1) * 0.5,  # Wider SL in high vol
+            "tp_multiplier": 2.0 + (volatility_ratio - 1) * 0.5,  # Wider TP in high vol
+        }
+
+    def calculate_risk_score(self, df, signal_type):
+        """คำนวณ Risk Score สำหรับ Trade (0-100, lower is better)"""
+        latest = df.iloc[-1]
+        risk_score = 50  # Start at neutral
+        risk_factors = []
+
+        # 1. Volatility Risk
+        atr_pct = latest["ATR_percent"] if pd.notna(latest.get("ATR_percent")) else 3
+        if atr_pct > 5:
+            risk_score += 15
+            risk_factors.append(f"High Volatility ({atr_pct:.1f}%)")
+        elif atr_pct > 3:
+            risk_score += 5
+            risk_factors.append(f"Moderate Volatility ({atr_pct:.1f}%)")
+        else:
+            risk_score -= 5
+            risk_factors.append(f"Low Volatility ({atr_pct:.1f}%)")
+
+        # 2. Trend Alignment Risk
+        if signal_type == "LONG":
+            if latest["EMA_9"] < latest["EMA_21"]:
+                risk_score += 10
+                risk_factors.append("Counter-trend: EMA bearish")
+            if latest["close"] < latest["EMA_50"]:
+                risk_score += 5
+                risk_factors.append("Price below EMA50")
+        else:  # SHORT
+            if latest["EMA_9"] > latest["EMA_21"]:
+                risk_score += 10
+                risk_factors.append("Counter-trend: EMA bullish")
+            if latest["close"] > latest["EMA_50"]:
+                risk_score += 5
+                risk_factors.append("Price above EMA50")
+
+        # 3. RSI Risk
+        rsi = latest["RSI"] if pd.notna(latest.get("RSI")) else 50
+        if signal_type == "LONG" and rsi > 70:
+            risk_score += 10
+            risk_factors.append("RSI Overbought for Long")
+        elif signal_type == "SHORT" and rsi < 30:
+            risk_score += 10
+            risk_factors.append("RSI Oversold for Short")
+
+        # 4. ADX Risk (weak trend)
+        adx = latest["ADX"] if pd.notna(latest.get("ADX")) else 20
+        if adx < 20:
+            risk_score += 10
+            risk_factors.append(f"Weak Trend (ADX: {adx:.0f})")
+        elif adx > 40:
+            risk_score -= 10
+            risk_factors.append(f"Strong Trend (ADX: {adx:.0f})")
+
+        # 5. Volume Risk
+        vol_ratio = latest["Volume_Ratio"] if pd.notna(latest.get("Volume_Ratio")) else 1
+        if vol_ratio < 0.5:
+            risk_score += 10
+            risk_factors.append("Low Volume")
+        elif vol_ratio > 2:
+            risk_score -= 5
+            risk_factors.append("High Volume Confirmation")
+
+        # 6. BB Position Risk
+        bb_pct = latest["BB_percent"] if pd.notna(latest.get("BB_percent")) else 0.5
+        if signal_type == "LONG" and bb_pct > 0.9:
+            risk_score += 10
+            risk_factors.append("Price at BB Upper")
+        elif signal_type == "SHORT" and bb_pct < 0.1:
+            risk_score += 10
+            risk_factors.append("Price at BB Lower")
+
+        # Clamp between 0-100
+        risk_score = max(0, min(100, risk_score))
+
+        risk_level = "LOW" if risk_score < 40 else "MEDIUM" if risk_score < 60 else "HIGH"
+
+        return {
+            "score": risk_score,
+            "level": risk_level,
+            "factors": risk_factors
+        }
+
+    def get_candlestick_signals(self, df):
+        """รวบรวมสัญญาณจาก Candlestick Patterns"""
+        latest = df.iloc[-1]
+        signals = {"bullish": [], "bearish": [], "score": 0}
+
+        # Bullish patterns
+        bullish_patterns = [
+            ("HAMMER", "Hammer", 2),
+            ("INVERTED_HAMMER", "Inverted Hammer", 1),
+            ("BULLISH_ENGULFING", "Bullish Engulfing", 3),
+            ("MORNING_STAR", "Morning Star", 3),
+            ("THREE_WHITE_SOLDIERS", "Three White Soldiers", 4),
+        ]
+
+        for col, name, score in bullish_patterns:
+            if pd.notna(latest.get(col)) and latest[col]:
+                signals["bullish"].append(name)
+                signals["score"] += score
+
+        # Bearish patterns
+        bearish_patterns = [
+            ("SHOOTING_STAR", "Shooting Star", 2),
+            ("HANGING_MAN", "Hanging Man", 1),
+            ("BEARISH_ENGULFING", "Bearish Engulfing", 3),
+            ("EVENING_STAR", "Evening Star", 3),
+            ("THREE_BLACK_CROWS", "Three Black Crows", 4),
+        ]
+
+        for col, name, score in bearish_patterns:
+            if pd.notna(latest.get(col)) and latest[col]:
+                signals["bearish"].append(name)
+                signals["score"] -= score
+
+        # Neutral patterns
+        if pd.notna(latest.get("DOJI")) and latest["DOJI"]:
+            if signals["score"] > 0:
+                signals["bearish"].append("Doji (Reversal Warning)")
+            elif signals["score"] < 0:
+                signals["bullish"].append("Doji (Reversal Warning)")
+
+        return signals
 
     def calculate_support_resistance(self, df, lookback=20):
         """คำนวณ Support & Resistance แบบปรับปรุง"""
@@ -579,7 +1074,7 @@ class WeeklyTradingStrategy:
         return base_score * weight
 
     def get_weekly_signal(self):
-        """วิเคราะห์สัญญาณ Weekly แบบปรับปรุง พร้อมข้อมูลย้อนหลัง"""
+        """วิเคราะห์สัญญาณ Weekly แบบปรับปรุง พร้อมข้อมูลย้อนหลังและ Multi-Indicator Confirmation"""
 
         weekly = self.data["weekly"].iloc[-1]
         daily = self.data["daily"].iloc[-1]
@@ -592,6 +1087,23 @@ class WeeklyTradingStrategy:
         market_regime = self.detect_market_regime(self.data["daily"])
         historical_perf = self.analyze_historical_performance(self.data["daily"])
         trend_consistency = self.check_trend_consistency()
+
+        # === NEW: Advanced Analysis ===
+        # Dynamic Thresholds based on volatility
+        dynamic_thresholds = self.get_dynamic_thresholds(self.data["daily"])
+
+        # Multi-Indicator Confirmation
+        multi_indicator = self.get_multi_indicator_confirmation(self.data["daily"])
+
+        # Volume Confirmation
+        volume_confirm = self.get_volume_confirmation(self.data["daily"])
+
+        # Candlestick Pattern Signals
+        candlestick_signals = self.get_candlestick_signals(self.data["daily"])
+
+        # Confluence Zones
+        current_price = daily["close"]
+        confluence_zones = self.find_confluence_zones(self.data["daily"], current_price)
 
         signals = {"long": 0, "short": 0, "neutral": 0}
         reasons = {"long": [], "short": [], "neutral": []}
@@ -617,6 +1129,72 @@ class WeeklyTradingStrategy:
         else:
             signals["neutral"] += 1
             reasons["neutral"].append(f"⚠️ Mixed Trend ({trend_consistency['score']:.0f}%)")
+
+        # === NEW: Multi-Indicator Confirmation ===
+        if multi_indicator["confirmations"] >= 4:
+            if multi_indicator["direction"] == "bullish":
+                signals["long"] += 4
+                reasons["long"].append(f"🎯 Multi-Indicator Confirmed Bullish ({multi_indicator['confirmations']}/6, Strength: {multi_indicator['strength']:.0f}%)")
+            elif multi_indicator["direction"] == "bearish":
+                signals["short"] += 4
+                reasons["short"].append(f"🎯 Multi-Indicator Confirmed Bearish ({multi_indicator['confirmations']}/6, Strength: {multi_indicator['strength']:.0f}%)")
+        elif multi_indicator["confirmations"] >= 3:
+            if multi_indicator["direction"] == "bullish":
+                signals["long"] += 2
+                reasons["long"].append(f"📊 Multi-Indicator Bullish ({multi_indicator['confirmations']}/6)")
+            elif multi_indicator["direction"] == "bearish":
+                signals["short"] += 2
+                reasons["short"].append(f"📊 Multi-Indicator Bearish ({multi_indicator['confirmations']}/6)")
+
+        # === NEW: Volume Confirmation ===
+        if volume_confirm["confirmed"]:
+            if volume_confirm["obv_trend"] == "bullish":
+                signals["long"] += 3
+                reasons["long"].append(f"📈 Volume Confirmed with Bullish OBV ({volume_confirm['volume_ratio']:.1f}x)")
+            elif volume_confirm["obv_trend"] == "bearish":
+                signals["short"] += 3
+                reasons["short"].append(f"📉 Volume Confirmed with Bearish OBV ({volume_confirm['volume_ratio']:.1f}x)")
+
+        if volume_confirm["volume_trend"] == "increasing" and volume_confirm["volume_ratio"] > 1.5:
+            reasons["neutral"].append(f"📊 Volume Trend: Increasing ({volume_confirm['volume_ratio']:.1f}x avg)")
+
+        # === NEW: Candlestick Pattern Signals ===
+        total_patterns = len(candlestick_signals["bullish"]) + len(candlestick_signals["bearish"])
+        if total_patterns > 0:
+            cs_score = candlestick_signals["score"]
+            if cs_score >= 3:
+                signals["long"] += 3
+                patterns_str = ", ".join(candlestick_signals["bullish"][:2])
+                reasons["long"].append(f"🕯️ Strong Bullish Patterns: {patterns_str}")
+            elif cs_score >= 1:
+                signals["long"] += 1
+                patterns_str = ", ".join(candlestick_signals["bullish"][:1])
+                reasons["long"].append(f"🕯️ Bullish Pattern: {patterns_str}")
+            elif cs_score <= -3:
+                signals["short"] += 3
+                patterns_str = ", ".join(candlestick_signals["bearish"][:2])
+                reasons["short"].append(f"🕯️ Strong Bearish Patterns: {patterns_str}")
+            elif cs_score <= -1:
+                signals["short"] += 1
+                patterns_str = ", ".join(candlestick_signals["bearish"][:1])
+                reasons["short"].append(f"🕯️ Bearish Pattern: {patterns_str}")
+
+        # === NEW: Confluence Zones ===
+        # Check if price is near support confluence zone (within 2%)
+        if confluence_zones["support"]:
+            nearest_support = confluence_zones["support"][0]  # Already sorted by proximity
+            support_distance_pct = (current_price - nearest_support["price"]) / current_price * 100
+            if support_distance_pct < 2:  # Within 2% of support
+                signals["long"] += 2
+                reasons["long"].append(f"🎯 Near Confluence Support ({nearest_support['price']:.0f}, Strength: {nearest_support['strength']} levels)")
+
+        # Check if price is near resistance confluence zone (within 2%)
+        if confluence_zones["resistance"]:
+            nearest_resistance = confluence_zones["resistance"][0]  # Already sorted by proximity
+            resist_distance_pct = (nearest_resistance["price"] - current_price) / current_price * 100
+            if resist_distance_pct < 2:  # Within 2% of resistance
+                signals["short"] += 2
+                reasons["short"].append(f"🎯 Near Confluence Resistance ({nearest_resistance['price']:.0f}, Strength: {nearest_resistance['strength']} levels)")
 
         # === WEEKLY TIMEFRAME ANALYSIS ===
         if weekly["EMA_9"] > weekly["EMA_21"]:
@@ -678,13 +1256,15 @@ class WeeklyTradingStrategy:
             signals["short"] += 2
             reasons["short"].append("📉 Daily Downtrend")
 
-        # RSI Analysis with Divergence
-        if daily["RSI"] < 30:
+        # RSI Analysis with Dynamic Thresholds
+        rsi_oversold = dynamic_thresholds["rsi_oversold"]
+        rsi_overbought = dynamic_thresholds["rsi_overbought"]
+        if daily["RSI"] < rsi_oversold:
             signals["long"] += 3
-            reasons["long"].append(f"💪 Daily RSI Oversold: {daily['RSI']:.1f}")
-        elif daily["RSI"] > 70:
+            reasons["long"].append(f"💪 Daily RSI Oversold: {daily['RSI']:.1f} (< {rsi_oversold:.0f})")
+        elif daily["RSI"] > rsi_overbought:
             signals["short"] += 3
-            reasons["short"].append(f"⚠️ Daily RSI Overbought: {daily['RSI']:.1f}")
+            reasons["short"].append(f"⚠️ Daily RSI Overbought: {daily['RSI']:.1f} (> {rsi_overbought:.0f})")
 
         # Divergence Detection แบบปรับปรุง
         daily_divergence, div_strength = self.check_divergence(self.data["daily"], "RSI")
@@ -798,6 +1378,25 @@ class WeeklyTradingStrategy:
             elif daily["ICHI_TENKAN"] < daily["ICHI_KIJUN"]:
                 signals["short"] += 1
                 reasons["short"].append("📊 Ichimoku TK Cross Bearish")
+
+        # === NEW: Add Advanced Analysis Summary ===
+        # Calculate overall signal direction for risk score
+        signal_type = "LONG" if signals["long"] > signals["short"] else "SHORT" if signals["short"] > signals["long"] else "NEUTRAL"
+        risk_score = self.calculate_risk_score(self.data["daily"], signal_type)
+
+        # Add analysis summary to reasons
+        reasons["neutral"].append(f"📊 Dynamic RSI Thresholds: Oversold < {dynamic_thresholds['rsi_oversold']:.0f}, Overbought > {dynamic_thresholds['rsi_overbought']:.0f}")
+        reasons["neutral"].append(f"⚠️ Trade Risk Score: {risk_score['score']:.0f}/100 ({risk_score['level']})")
+
+        # Store additional analysis data for position management
+        self._last_analysis = {
+            "multi_indicator": multi_indicator,
+            "volume_confirm": volume_confirm,
+            "candlestick_signals": candlestick_signals,
+            "confluence_zones": confluence_zones,
+            "dynamic_thresholds": dynamic_thresholds,
+            "risk_score": risk_score
+        }
 
         return signals, reasons
 
@@ -1102,6 +1701,60 @@ class WeeklyTradingStrategy:
             print(f"  • Regime: {regime_text} ({regime['confidence']:.0f}% confidence)")
             print(f"  • ADX: {regime['adx']:.1f} | BB Width: {regime['bb_width']:.2f}%")
             print(f"  • Price Range (20d): {regime['price_range_pct']:.1f}%")
+
+        # Advanced Analysis from last signal
+        if hasattr(self, "_last_analysis") and self._last_analysis:
+            analysis = self._last_analysis
+
+            # Multi-Indicator Confirmation
+            multi_ind = analysis.get("multi_indicator", {})
+            if multi_ind:
+                confirm_pct = (multi_ind.get("confirmations", 0) / 6) * 100
+                direction = multi_ind.get("direction", "neutral").upper()
+                print("\n🎯 MULTI-INDICATOR CONFIRMATION:")
+                print(f"  • Direction: {direction} ({multi_ind.get('confirmations', 0)}/6 indicators)")
+                print(f"  • Confirmation: {confirm_pct:.0f}% | Strength: {multi_ind.get('strength', 0):.0f}%")
+                if multi_ind.get("details"):
+                    for detail in multi_ind["details"][:3]:
+                        print(f"    ✓ {detail}")
+
+            # Risk Score
+            risk_score = analysis.get("risk_score", {})
+            if risk_score:
+                risk_level = risk_score.get("level", "Unknown")
+                risk_emoji = "🟢" if risk_level == "LOW" else "🟡" if risk_level == "MEDIUM" else "🔴"
+                print("\n⚠️ TRADE RISK ASSESSMENT:")
+                print(f"  • Risk Score: {risk_emoji} {risk_score.get('score', 0):.0f}/100 ({risk_level})")
+                factors = risk_score.get("factors", [])
+                if factors:
+                    print("  • Risk Factors:")
+                    for factor in factors[:4]:
+                        print(f"    - {factor}")
+
+            # Confluence Zones
+            confluence = analysis.get("confluence_zones", {})
+            if confluence:
+                supports = confluence.get("support", [])
+                resistances = confluence.get("resistance", [])
+                if supports or resistances:
+                    print("\n🎯 CONFLUENCE ZONES:")
+                    if supports:
+                        for i, zone in enumerate(supports[:2], 1):
+                            print(f"  • Support Zone {i}: ${zone['price']:,.0f} (Strength: {zone['strength']} levels)")
+                    if resistances:
+                        for i, zone in enumerate(resistances[:2], 1):
+                            print(f"  • Resistance Zone {i}: ${zone['price']:,.0f} (Strength: {zone['strength']} levels)")
+
+            # Candlestick Patterns
+            candle_signals = analysis.get("candlestick_signals", {})
+            total_cs_patterns = len(candle_signals.get("bullish", [])) + len(candle_signals.get("bearish", []))
+            if candle_signals and total_cs_patterns > 0:
+                print("\n🕯️ CANDLESTICK PATTERNS:")
+                if candle_signals.get("bullish"):
+                    print(f"  • Bullish: {', '.join(candle_signals['bullish'][:3])}")
+                if candle_signals.get("bearish"):
+                    print(f"  • Bearish: {', '.join(candle_signals['bearish'][:3])}")
+                print(f"  • Net Score: {candle_signals.get('score', 0):+d}")
 
         # Volatility Info
         if "volatility_risk" in position_mgmt:
