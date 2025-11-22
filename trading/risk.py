@@ -150,7 +150,7 @@ def calculate_support_resistance(df: pd.DataFrame, lookback: int = 20) -> dict:
 
 
 def calculate_fibonacci_levels(df: pd.DataFrame, lookback: int = 50) -> tuple:
-    """คำนวณ Fibonacci Retracement Levels"""
+    """คำนวณ Fibonacci Retracement และ Extension Levels"""
     if lookback > len(df):
         lookback = len(df)
 
@@ -166,8 +166,9 @@ def calculate_fibonacci_levels(df: pd.DataFrame, lookback: int = 50) -> tuple:
     diff = high - low
 
     if is_uptrend:
-        # Uptrend: levels from low to high
+        # Uptrend: retracement from high, extension above high
         levels = {
+            # Retracement levels (support zones for pullback)
             "0.0%": low,
             "23.6%": low + diff * 0.236,
             "38.2%": low + diff * 0.382,
@@ -175,11 +176,17 @@ def calculate_fibonacci_levels(df: pd.DataFrame, lookback: int = 50) -> tuple:
             "61.8%": low + diff * 0.618,
             "78.6%": low + diff * 0.786,
             "100%": high,
+            # Extension levels (profit targets above high)
+            "127.2%": high + diff * 0.272,
+            "161.8%": high + diff * 0.618,
+            "200.0%": high + diff * 1.0,
+            "261.8%": high + diff * 1.618,
         }
         trend = "uptrend"
     else:
-        # Downtrend: levels from high to low
+        # Downtrend: retracement from low, extension below low
         levels = {
+            # Retracement levels (resistance zones for pullback)
             "0.0%": high,
             "23.6%": high - diff * 0.236,
             "38.2%": high - diff * 0.382,
@@ -187,6 +194,11 @@ def calculate_fibonacci_levels(df: pd.DataFrame, lookback: int = 50) -> tuple:
             "61.8%": high - diff * 0.618,
             "78.6%": high - diff * 0.786,
             "100%": low,
+            # Extension levels (profit targets below low)
+            "127.2%": low - diff * 0.272,
+            "161.8%": low - diff * 0.618,
+            "200.0%": low - diff * 1.0,
+            "261.8%": low - diff * 1.618,
         }
         trend = "downtrend"
 

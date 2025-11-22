@@ -386,54 +386,183 @@ def detect_market_regime(df: pd.DataFrame) -> dict:
 
 
 def analyze_historical_performance(df: pd.DataFrame, lookback: int = 50) -> dict:
-    """วิเคราะห์ Performance ย้อนหลังของสัญญาณ"""
+    """
+    วิเคราะห์ Performance ย้อนหลังของสัญญาณแบบ Multi-Indicator
+
+    Entry Conditions (Long):
+    - RSI < 35 AND RSI rising (confirmation)
+    - MACD histogram turning positive OR
+    - Price above EMA9
+
+    Exit Conditions:
+    - RSI > 65 OR
+    - MACD histogram turning negative OR
+    - Stop loss: -3% OR Take profit: +5%
+    """
     if len(df) < lookback:
         lookback = len(df) - 1
 
-    if lookback < 10:
-        return {"total_signals": 0, "win_rate": 0, "avg_return": 0, "max_drawdown": 0, "sharpe": 0}
+    if lookback < 15:
+        return {
+            "total_signals": 0, "win_rate": 0, "avg_return": 0,
+            "max_drawdown": 0, "sharpe": 0, "profit_factor": 0,
+            "long_signals": 0, "short_signals": 0
+        }
 
-    recent_df = df.tail(lookback)
+    recent_df = df.tail(lookback).copy()
+    recent_df = recent_df.reset_index(drop=True)
 
-    # Simple backtest: buy when RSI < 30, sell when RSI > 70
-    signals = []
+    trades = []
     position = None
 
-    for i in range(1, len(recent_df)):
+    for i in range(2, len(recent_df)):
         row = recent_df.iloc[i]
         prev_row = recent_df.iloc[i - 1]
 
-        if position is None and prev_row["RSI"] < 30:
-            position = {"entry": row["close"], "type": "long"}
-        elif position is not None and prev_row["RSI"] > 70:
-            exit_price = row["close"]
-            returns = (exit_price - position["entry"]) / position["entry"] * 100
-            signals.append(returns)
-            position = None
+        # Skip if essential indicators are missing
+        if pd.isna(row.get("RSI")) or pd.isna(row.get("MACD_histogram")):
+            continue
 
-    if not signals:
-        return {"total_signals": 0, "win_rate": 0, "avg_return": 0, "max_drawdown": 0, "sharpe": 0}
+        rsi = row["RSI"]
+        rsi_prev = prev_row["RSI"]
+        rsi_rising = rsi > rsi_prev
+        rsi_falling = rsi < rsi_prev
 
-    wins = sum(1 for s in signals if s > 0)
-    win_rate = wins / len(signals) * 100
-    avg_return = np.mean(signals)
+        macd_hist = row["MACD_histogram"]
+        macd_hist_prev = prev_row["MACD_histogram"]
+        macd_turning_up = macd_hist > macd_hist_prev
+        macd_turning_down = macd_hist < macd_hist_prev
 
-    # Calculate max drawdown
-    cumulative = np.cumsum(signals)
+        ema_bullish = row["close"] > row["EMA_9"] > row["EMA_21"]
+        ema_bearish = row["close"] < row["EMA_9"] < row["EMA_21"]
+
+        # ADX for trend strength
+        adx = row.get("ADX", 20)
+        strong_trend = adx > 25
+
+        if position is None:
+            # === LONG ENTRY ===
+            # Condition: RSI oversold + rising + (MACD turning up OR EMA bullish)
+            long_signal = (
+                rsi < 35 and
+                rsi_rising and
+                (macd_turning_up or ema_bullish)
+            )
+
+            # === SHORT ENTRY ===
+            # Condition: RSI overbought + falling + (MACD turning down OR EMA bearish)
+            short_signal = (
+                rsi > 65 and
+                rsi_falling and
+                (macd_turning_down or ema_bearish)
+            )
+
+            if long_signal:
+                position = {
+                    "entry": row["close"],
+                    "type": "long",
+                    "entry_idx": i,
+                    "stop_loss": row["close"] * 0.97,  # -3%
+                    "take_profit": row["close"] * 1.05  # +5%
+                }
+            elif short_signal and strong_trend:
+                position = {
+                    "entry": row["close"],
+                    "type": "short",
+                    "entry_idx": i,
+                    "stop_loss": row["close"] * 1.03,  # +3%
+                    "take_profit": row["close"] * 0.95  # -5%
+                }
+
+        else:
+            # === EXIT CONDITIONS ===
+            current_price = row["close"]
+            entry_price = position["entry"]
+
+            if position["type"] == "long":
+                # Long exit conditions
+                pnl_pct = (current_price - entry_price) / entry_price * 100
+
+                exit_signal = (
+                    current_price <= position["stop_loss"] or  # Stop loss
+                    current_price >= position["take_profit"] or  # Take profit
+                    (rsi > 65 and rsi_falling) or  # RSI overbought + falling
+                    (macd_turning_down and macd_hist < 0)  # MACD bearish
+                )
+
+                if exit_signal:
+                    trades.append({
+                        "type": "long",
+                        "entry": entry_price,
+                        "exit": current_price,
+                        "pnl_pct": pnl_pct,
+                        "bars_held": i - position["entry_idx"]
+                    })
+                    position = None
+
+            else:  # Short position
+                pnl_pct = (entry_price - current_price) / entry_price * 100
+
+                exit_signal = (
+                    current_price >= position["stop_loss"] or  # Stop loss
+                    current_price <= position["take_profit"] or  # Take profit
+                    (rsi < 35 and rsi_rising) or  # RSI oversold + rising
+                    (macd_turning_up and macd_hist > 0)  # MACD bullish
+                )
+
+                if exit_signal:
+                    trades.append({
+                        "type": "short",
+                        "entry": entry_price,
+                        "exit": current_price,
+                        "pnl_pct": pnl_pct,
+                        "bars_held": i - position["entry_idx"]
+                    })
+                    position = None
+
+    # Calculate statistics
+    if not trades:
+        return {
+            "total_signals": 0, "win_rate": 0, "avg_return": 0,
+            "max_drawdown": 0, "sharpe": 0, "profit_factor": 0,
+            "long_signals": 0, "short_signals": 0
+        }
+
+    returns = [t["pnl_pct"] for t in trades]
+    wins = [r for r in returns if r > 0]
+    losses = [r for r in returns if r < 0]
+
+    win_rate = len(wins) / len(trades) * 100 if trades else 0
+    avg_return = np.mean(returns) if returns else 0
+
+    # Profit factor
+    gross_profit = sum(wins) if wins else 0
+    gross_loss = abs(sum(losses)) if losses else 1
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else gross_profit
+
+    # Max drawdown
+    cumulative = np.cumsum(returns)
     running_max = np.maximum.accumulate(cumulative)
     drawdown = running_max - cumulative
     max_drawdown = np.max(drawdown) if len(drawdown) > 0 else 0
 
-    # Sharpe ratio (simplified)
-    if np.std(signals) > 0:
-        sharpe = avg_return / np.std(signals)
-    else:
-        sharpe = 0
+    # Sharpe ratio (simplified, assuming 0 risk-free rate)
+    sharpe = avg_return / np.std(returns) if np.std(returns) > 0 else 0
+
+    # Count by type
+    long_trades = [t for t in trades if t["type"] == "long"]
+    short_trades = [t for t in trades if t["type"] == "short"]
 
     return {
-        "total_signals": len(signals),
+        "total_signals": len(trades),
         "win_rate": win_rate,
         "avg_return": avg_return,
         "max_drawdown": max_drawdown,
-        "sharpe": sharpe
+        "sharpe": sharpe,
+        "profit_factor": profit_factor,
+        "long_signals": len(long_trades),
+        "short_signals": len(short_trades),
+        "avg_bars_held": np.mean([t["bars_held"] for t in trades]) if trades else 0,
+        "best_trade": max(returns) if returns else 0,
+        "worst_trade": min(returns) if returns else 0
     }

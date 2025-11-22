@@ -182,29 +182,92 @@ class WeeklyTradingStrategy(BaseStrategy):
             "counter_trend": -2,      # Trading against higher timeframe
             "low_volume": -2,         # Below average volume
             "mixed_signals": -1,      # Conflicting indicators
+
+            # Oversold/Overbought in Strong Trend (penalty for counter-trend signals)
+            "oversold_in_downtrend_penalty": 0.3,  # Reduce oversold weight by 70%
+            "overbought_in_uptrend_penalty": 0.3,  # Reduce overbought weight by 70%
         }
 
         signals = {"long": 0, "short": 0, "neutral": 0}
         reasons = {"long": [], "short": [], "neutral": []}
+
+        # === DYNAMIC WEIGHT ADJUSTMENT BASED ON ADX ===
+        # เมื่อ ADX สูง (trend แรง): เพิ่ม weight ให้ trend signals, ลด weight ให้ oscillators
+        # เมื่อ ADX ต่ำ (sideways): ลด weight ให้ trend signals, เพิ่ม weight ให้ oscillators
+        adx_value = daily["ADX"] if pd.notna(daily.get("ADX")) else 20
+
+        if adx_value >= 40:
+            # Very strong trend - heavily favor trend-following
+            trend_multiplier = 1.5      # Boost trend signals by 50%
+            oscillator_multiplier = 0.5  # Reduce oscillator signals by 50%
+            weight_note = "Very Strong Trend (ADX≥40): Trend signals boosted, oscillators reduced"
+        elif adx_value >= 25:
+            # Strong trend - moderately favor trend-following
+            trend_multiplier = 1.2      # Boost trend signals by 20%
+            oscillator_multiplier = 0.8  # Reduce oscillator signals by 20%
+            weight_note = "Strong Trend (ADX≥25): Trend signals slightly boosted"
+        elif adx_value < 20:
+            # Weak trend/sideways - favor mean reversion (oscillators)
+            trend_multiplier = 0.8      # Reduce trend signals by 20%
+            oscillator_multiplier = 1.2  # Boost oscillator signals by 20%
+            weight_note = "Weak Trend (ADX<20): Oscillator signals boosted for mean reversion"
+        else:
+            # Normal - no adjustment
+            trend_multiplier = 1.0
+            oscillator_multiplier = 1.0
+            weight_note = "Normal Trend (20≤ADX<25): Balanced weights"
+
+        # === DETECT STRONG TREND FOR OVERSOLD/OVERBOUGHT PENALTY ===
+        # ใน Strong Downtrend: Oversold อาจเป็น "falling knife" ไม่ใช่โอกาสซื้อ
+        # ใน Strong Uptrend: Overbought อาจเป็น "momentum" ไม่ใช่โอกาสขาย
+        is_strong_downtrend = (
+            market_regime["regime"] == "STRONG_DOWNTREND" or
+            (trend_consistency["consistent"] and
+             trend_consistency["direction"] == "bearish" and
+             trend_consistency["score"] >= 80)
+        )
+        is_strong_uptrend = (
+            market_regime["regime"] == "STRONG_UPTREND" or
+            (trend_consistency["consistent"] and
+             trend_consistency["direction"] == "bullish" and
+             trend_consistency["score"] >= 80)
+        )
+
+        # Multiplier สำหรับ oversold/overbought signals
+        oversold_multiplier = WEIGHTS["oversold_in_downtrend_penalty"] if is_strong_downtrend else 1.0
+        overbought_multiplier = WEIGHTS["overbought_in_uptrend_penalty"] if is_strong_uptrend else 1.0
+
+        if is_strong_downtrend:
+            reasons["neutral"].append("⚠️ Strong Downtrend: Oversold signals discounted (falling knife risk)")
+        if is_strong_uptrend:
+            reasons["neutral"].append("⚠️ Strong Uptrend: Overbought signals discounted (momentum may continue)")
+
+        # เพิ่มข้อมูล Weight Adjustment
+        reasons["neutral"].append(f"⚖️ {weight_note}")
 
         # เพิ่มข้อมูล Market Context
         regime_text = market_regime["regime"].replace("_", " ")
         reasons["neutral"].append(f"📈 Market Regime: {regime_text} ({market_regime['confidence']:.0f}%)")
 
         if historical_perf["total_signals"] > 0:
+            pf = historical_perf.get("profit_factor", 0)
+            pf_str = f", PF {pf:.2f}" if pf > 0 else ""
             reasons["neutral"].append(
-                f"📊 Historical: Win Rate {historical_perf['win_rate']:.1f}%, "
-                f"Avg Return {historical_perf['avg_return']:.2f}%"
+                f"📊 Backtest ({historical_perf['total_signals']} trades): "
+                f"Win {historical_perf['win_rate']:.0f}%, "
+                f"Avg {historical_perf['avg_return']:.1f}%{pf_str}"
             )
 
-        # === TREND CONSISTENCY (Multi-timeframe alignment) ===
+        # === TREND CONSISTENCY (Multi-timeframe alignment) - TREND SIGNAL ===
         if trend_consistency["consistent"]:
             direction = trend_consistency["direction"]
+            base_weight = WEIGHTS["trend_consistency"]
+            adjusted_weight = int(base_weight * trend_multiplier)
             if direction == "bullish":
-                signals["long"] += WEIGHTS["trend_consistency"]
+                signals["long"] += adjusted_weight
                 reasons["long"].append(f"✅ Trend Consistency: Strong Bullish ({trend_consistency['score']:.0f}%)")
             elif direction == "bearish":
-                signals["short"] += WEIGHTS["trend_consistency"]
+                signals["short"] += adjusted_weight
                 reasons["short"].append(f"✅ Trend Consistency: Strong Bearish ({trend_consistency['score']:.0f}%)")
         else:
             signals["neutral"] += 1
@@ -286,13 +349,17 @@ class WeeklyTradingStrategy(BaseStrategy):
             elif tsi_prev >= tsi_signal_prev and tsi < tsi_signal:
                 signals["short"] += WEIGHTS["tsi_signal"]
                 reasons["short"].append(f"📉 TSI Bearish Cross: {tsi:.1f}")
-            # TSI extreme levels
+            # TSI extreme levels - OSCILLATOR SIGNAL (apply both multipliers)
             elif tsi < -25:
-                signals["long"] += 2
-                reasons["long"].append(f"💪 TSI Oversold: {tsi:.1f}")
+                weight = int(2 * oscillator_multiplier * oversold_multiplier)
+                signals["long"] += weight
+                discount_note = " [discounted]" if oversold_multiplier < 1 or oscillator_multiplier < 1 else ""
+                reasons["long"].append(f"💪 TSI Oversold: {tsi:.1f}{discount_note}")
             elif tsi > 25:
-                signals["short"] += 2
-                reasons["short"].append(f"⚠️ TSI Overbought: {tsi:.1f}")
+                weight = int(2 * oscillator_multiplier * overbought_multiplier)
+                signals["short"] += weight
+                discount_note = " [discounted]" if overbought_multiplier < 1 or oscillator_multiplier < 1 else ""
+                reasons["short"].append(f"⚠️ TSI Overbought: {tsi:.1f}{discount_note}")
 
         # === VWAP Position ===
         if pd.notna(daily.get("VWAP")):
@@ -340,35 +407,66 @@ class WeeklyTradingStrategy(BaseStrategy):
                 signals["short"] += WEIGHTS["confluence_zone"]
                 reasons["short"].append(f"🎯 Near Confluence Resistance (Strength: {nearest_resistance['strength']})")
 
-        # === WEEKLY TIMEFRAME ANALYSIS (Highest Weight) ===
+        # === WEEKLY TIMEFRAME ANALYSIS (Highest Weight) - TREND SIGNALS ===
         if weekly["EMA_9"] > weekly["EMA_21"]:
-            signals["long"] += WEIGHTS["weekly_trend"]
+            weight = int(WEIGHTS["weekly_trend"] * trend_multiplier)
+            signals["long"] += weight
             reasons["long"].append("📈 Weekly Uptrend: EMA 9 > 21")
         elif weekly["EMA_9"] < weekly["EMA_21"]:
-            signals["short"] += WEIGHTS["weekly_trend"]
+            weight = int(WEIGHTS["weekly_trend"] * trend_multiplier)
+            signals["short"] += weight
             reasons["short"].append("📉 Weekly Downtrend: EMA 9 < 21")
 
-        # Golden/Death Cross (strongest signal)
+        # Golden/Death Cross (strongest signal) - TREND SIGNAL
         if weekly_prev["EMA_9"] <= weekly_prev["EMA_21"] and weekly["EMA_9"] > weekly["EMA_21"]:
-            signals["long"] += WEIGHTS["weekly_cross"]
+            weight = int(WEIGHTS["weekly_cross"] * trend_multiplier)
+            signals["long"] += weight
             reasons["long"].append("🔥 Weekly Golden Cross!")
         elif weekly_prev["EMA_9"] >= weekly_prev["EMA_21"] and weekly["EMA_9"] < weekly["EMA_21"]:
-            signals["short"] += WEIGHTS["weekly_cross"]
+            weight = int(WEIGHTS["weekly_cross"] * trend_multiplier)
+            signals["short"] += weight
             reasons["short"].append("🔥 Weekly Death Cross!")
 
-        # Weekly RSI
+        # Weekly RSI - OSCILLATOR SIGNAL with CONFIRMATION
+        # Oversold/Overbought ต้องมี reversal confirmation (RSI เริ่มกลับตัว) จึงจะให้คะแนนเต็ม
+        weekly_rsi_rising = weekly["RSI"] > weekly_prev["RSI"]
+        weekly_rsi_falling = weekly["RSI"] < weekly_prev["RSI"]
+
         if weekly["RSI"] < 30:
-            signals["long"] += WEIGHTS["weekly_rsi_extreme"]
-            reasons["long"].append(f"💪 Weekly RSI Oversold: {weekly['RSI']:.1f}")
+            if weekly_rsi_rising:
+                # Confirmed reversal from oversold
+                weight = int(WEIGHTS["weekly_rsi_extreme"] * oscillator_multiplier * oversold_multiplier)
+                signals["long"] += weight
+                discount_note = " [discounted]" if oversold_multiplier < 1 or oscillator_multiplier < 1 else ""
+                reasons["long"].append(f"💪 Weekly RSI Oversold + Reversal: {weekly['RSI']:.1f}{discount_note}")
+            else:
+                # No confirmation - just note it, no points (still falling)
+                reasons["neutral"].append(f"⏳ Weekly RSI Oversold ({weekly['RSI']:.1f}) - Awaiting reversal")
         elif weekly["RSI"] < 40:
-            signals["long"] += WEIGHTS["weekly_rsi_moderate"]
-            reasons["long"].append(f"📊 Weekly RSI Low: {weekly['RSI']:.1f}")
+            if weekly_rsi_rising:
+                weight = int(WEIGHTS["weekly_rsi_moderate"] * oscillator_multiplier * oversold_multiplier)
+                signals["long"] += weight
+                discount_note = " [discounted]" if oversold_multiplier < 1 or oscillator_multiplier < 1 else ""
+                reasons["long"].append(f"📊 Weekly RSI Low + Rising: {weekly['RSI']:.1f}{discount_note}")
+            else:
+                reasons["neutral"].append(f"⏳ Weekly RSI Low ({weekly['RSI']:.1f}) - Awaiting reversal")
         elif weekly["RSI"] > 70:
-            signals["short"] += WEIGHTS["weekly_rsi_extreme"]
-            reasons["short"].append(f"⚠️ Weekly RSI Overbought: {weekly['RSI']:.1f}")
+            if weekly_rsi_falling:
+                # Confirmed reversal from overbought
+                weight = int(WEIGHTS["weekly_rsi_extreme"] * oscillator_multiplier * overbought_multiplier)
+                signals["short"] += weight
+                discount_note = " [discounted]" if overbought_multiplier < 1 or oscillator_multiplier < 1 else ""
+                reasons["short"].append(f"⚠️ Weekly RSI Overbought + Reversal: {weekly['RSI']:.1f}{discount_note}")
+            else:
+                reasons["neutral"].append(f"⏳ Weekly RSI Overbought ({weekly['RSI']:.1f}) - Awaiting reversal")
         elif weekly["RSI"] > 60:
-            signals["short"] += WEIGHTS["weekly_rsi_moderate"]
-            reasons["short"].append(f"📊 Weekly RSI High: {weekly['RSI']:.1f}")
+            if weekly_rsi_falling:
+                weight = int(WEIGHTS["weekly_rsi_moderate"] * oscillator_multiplier * overbought_multiplier)
+                signals["short"] += weight
+                discount_note = " [discounted]" if overbought_multiplier < 1 or oscillator_multiplier < 1 else ""
+                reasons["short"].append(f"📊 Weekly RSI High + Falling: {weekly['RSI']:.1f}{discount_note}")
+            else:
+                reasons["neutral"].append(f"⏳ Weekly RSI High ({weekly['RSI']:.1f}) - Awaiting reversal")
         elif 45 < weekly["RSI"] < 55:
             signals["neutral"] += 1
             reasons["neutral"].append(f"😐 Weekly RSI Neutral: {weekly['RSI']:.1f}")
@@ -387,39 +485,84 @@ class WeeklyTradingStrategy(BaseStrategy):
                 signals["short"] += WEIGHTS["weekly_macd_momentum"]
                 reasons["short"].append("📉 Weekly MACD Momentum Decreasing")
 
-        # Weekly StochRSI
-        if pd.notna(weekly.get("STOCHRSI_K")):
-            if weekly["STOCHRSI_K"] < 20 and weekly["STOCHRSI_D"] < 20:
-                signals["long"] += WEIGHTS["weekly_stochrsi"]
-                reasons["long"].append(f"💪 Weekly StochRSI Oversold: {weekly['STOCHRSI_K']:.1f}")
-            elif weekly["STOCHRSI_K"] > 80 and weekly["STOCHRSI_D"] > 80:
-                signals["short"] += WEIGHTS["weekly_stochrsi"]
-                reasons["short"].append(f"⚠️ Weekly StochRSI Overbought: {weekly['STOCHRSI_K']:.1f}")
+        # Weekly StochRSI - OSCILLATOR SIGNAL with CROSSOVER CONFIRMATION
+        # Oversold: K < 20 AND K crosses above D (bullish crossover)
+        # Overbought: K > 80 AND K crosses below D (bearish crossover)
+        if pd.notna(weekly.get("STOCHRSI_K")) and pd.notna(weekly_prev.get("STOCHRSI_K")):
+            stoch_k = weekly["STOCHRSI_K"]
+            stoch_d = weekly["STOCHRSI_D"]
+            stoch_k_prev = weekly_prev["STOCHRSI_K"]
+            stoch_d_prev = weekly_prev["STOCHRSI_D"]
 
-        # === DAILY TIMEFRAME CONFIRMATION ===
+            # Bullish crossover: K crosses above D
+            bullish_cross = stoch_k_prev <= stoch_d_prev and stoch_k > stoch_d
+            # Bearish crossover: K crosses below D
+            bearish_cross = stoch_k_prev >= stoch_d_prev and stoch_k < stoch_d
+            # K rising
+            k_rising = stoch_k > stoch_k_prev
+
+            if stoch_k < 20 and stoch_d < 20:
+                if bullish_cross or k_rising:
+                    # Confirmed: oversold with bullish crossover or K rising
+                    weight = int(WEIGHTS["weekly_stochrsi"] * oscillator_multiplier * oversold_multiplier)
+                    signals["long"] += weight
+                    discount_note = " [discounted]" if oversold_multiplier < 1 or oscillator_multiplier < 1 else ""
+                    confirm_type = "Cross" if bullish_cross else "Rising"
+                    reasons["long"].append(f"💪 Weekly StochRSI Oversold + {confirm_type}: {stoch_k:.1f}{discount_note}")
+                else:
+                    reasons["neutral"].append(f"⏳ Weekly StochRSI Oversold ({stoch_k:.1f}) - Awaiting crossover")
+            elif stoch_k > 80 and stoch_d > 80:
+                if bearish_cross or stoch_k < stoch_k_prev:
+                    # Confirmed: overbought with bearish crossover or K falling
+                    weight = int(WEIGHTS["weekly_stochrsi"] * oscillator_multiplier * overbought_multiplier)
+                    signals["short"] += weight
+                    discount_note = " [discounted]" if overbought_multiplier < 1 or oscillator_multiplier < 1 else ""
+                    confirm_type = "Cross" if bearish_cross else "Falling"
+                    reasons["short"].append(f"⚠️ Weekly StochRSI Overbought + {confirm_type}: {stoch_k:.1f}{discount_note}")
+                else:
+                    reasons["neutral"].append(f"⏳ Weekly StochRSI Overbought ({stoch_k:.1f}) - Awaiting crossover")
+
+        # === DAILY TIMEFRAME CONFIRMATION - TREND SIGNAL ===
         if daily["EMA_9"] > daily["EMA_21"]:
-            signals["long"] += WEIGHTS["daily_trend"]
+            weight = int(WEIGHTS["daily_trend"] * trend_multiplier)
+            signals["long"] += weight
             reasons["long"].append("📈 Daily Uptrend")
             # Check for counter-trend warning
             if weekly["EMA_9"] < weekly["EMA_21"]:
                 signals["neutral"] += abs(WEIGHTS["counter_trend"])
                 reasons["neutral"].append("⚠️ Daily vs Weekly conflict")
         elif daily["EMA_9"] < daily["EMA_21"]:
-            signals["short"] += WEIGHTS["daily_trend"]
+            weight = int(WEIGHTS["daily_trend"] * trend_multiplier)
+            signals["short"] += weight
             reasons["short"].append("📉 Daily Downtrend")
             if weekly["EMA_9"] > weekly["EMA_21"]:
                 signals["neutral"] += abs(WEIGHTS["counter_trend"])
                 reasons["neutral"].append("⚠️ Daily vs Weekly conflict")
 
-        # RSI with Dynamic Thresholds
+        # Daily RSI - OSCILLATOR SIGNAL with CONFIRMATION
         rsi_oversold = dynamic_thresholds["rsi_oversold"]
         rsi_overbought = dynamic_thresholds["rsi_overbought"]
+        daily_rsi_rising = daily["RSI"] > daily_prev["RSI"]
+        daily_rsi_falling = daily["RSI"] < daily_prev["RSI"]
+
         if daily["RSI"] < rsi_oversold:
-            signals["long"] += WEIGHTS["daily_rsi_extreme"]
-            reasons["long"].append(f"💪 Daily RSI Oversold: {daily['RSI']:.1f} (< {rsi_oversold:.0f})")
+            if daily_rsi_rising:
+                # Confirmed reversal from oversold
+                weight = int(WEIGHTS["daily_rsi_extreme"] * oscillator_multiplier * oversold_multiplier)
+                signals["long"] += weight
+                discount_note = " [discounted]" if oversold_multiplier < 1 or oscillator_multiplier < 1 else ""
+                reasons["long"].append(f"💪 Daily RSI Oversold + Reversal: {daily['RSI']:.1f} (< {rsi_oversold:.0f}){discount_note}")
+            else:
+                reasons["neutral"].append(f"⏳ Daily RSI Oversold ({daily['RSI']:.1f}) - Awaiting reversal")
         elif daily["RSI"] > rsi_overbought:
-            signals["short"] += WEIGHTS["daily_rsi_extreme"]
-            reasons["short"].append(f"⚠️ Daily RSI Overbought: {daily['RSI']:.1f} (> {rsi_overbought:.0f})")
+            if daily_rsi_falling:
+                # Confirmed reversal from overbought
+                weight = int(WEIGHTS["daily_rsi_extreme"] * oscillator_multiplier * overbought_multiplier)
+                signals["short"] += weight
+                discount_note = " [discounted]" if overbought_multiplier < 1 or oscillator_multiplier < 1 else ""
+                reasons["short"].append(f"⚠️ Daily RSI Overbought + Reversal: {daily['RSI']:.1f} (> {rsi_overbought:.0f}){discount_note}")
+            else:
+                reasons["neutral"].append(f"⏳ Daily RSI Overbought ({daily['RSI']:.1f}) - Awaiting reversal")
 
         # Divergence Detection (weighted by strength)
         daily_divergence, div_strength = self.check_divergence(self.data["daily"], "RSI")
@@ -461,38 +604,50 @@ class WeeklyTradingStrategy(BaseStrategy):
             signals["short"] += WEIGHTS["daily_macd_cross"]
             reasons["short"].append("❌ Daily MACD Cross Down")
 
-        # MFI (weight 2)
+        # MFI - OSCILLATOR SIGNAL (apply both oscillator_multiplier and oversold/overbought multiplier)
         if pd.notna(daily.get("MFI")):
             if daily["MFI"] < 20:
-                signals["long"] += 2
-                reasons["long"].append(f"💰 Daily MFI Oversold: {daily['MFI']:.1f}")
+                weight = int(2 * oscillator_multiplier * oversold_multiplier)
+                signals["long"] += weight
+                discount_note = " [discounted]" if oversold_multiplier < 1 or oscillator_multiplier < 1 else ""
+                reasons["long"].append(f"💰 Daily MFI Oversold: {daily['MFI']:.1f}{discount_note}")
             elif daily["MFI"] > 80:
-                signals["short"] += 2
-                reasons["short"].append(f"💰 Daily MFI Overbought: {daily['MFI']:.1f}")
+                weight = int(2 * oscillator_multiplier * overbought_multiplier)
+                signals["short"] += weight
+                discount_note = " [discounted]" if overbought_multiplier < 1 or oscillator_multiplier < 1 else ""
+                reasons["short"].append(f"💰 Daily MFI Overbought: {daily['MFI']:.1f}{discount_note}")
 
-        # CCI (weight 1)
+        # CCI - OSCILLATOR SIGNAL (apply both oscillator_multiplier and oversold/overbought multiplier)
         if pd.notna(daily.get("CCI")):
             if daily["CCI"] < -100:
-                signals["long"] += 1
-                reasons["long"].append(f"📊 Daily CCI Oversold: {daily['CCI']:.1f}")
+                weight = int(1 * oscillator_multiplier * oversold_multiplier)
+                signals["long"] += weight
+                discount_note = " [discounted]" if oversold_multiplier < 1 or oscillator_multiplier < 1 else ""
+                reasons["long"].append(f"📊 Daily CCI Oversold: {daily['CCI']:.1f}{discount_note}")
             elif daily["CCI"] > 100:
-                signals["short"] += 1
-                reasons["short"].append(f"📊 Daily CCI Overbought: {daily['CCI']:.1f}")
+                weight = int(1 * oscillator_multiplier * overbought_multiplier)
+                signals["short"] += weight
+                discount_note = " [discounted]" if overbought_multiplier < 1 or oscillator_multiplier < 1 else ""
+                reasons["short"].append(f"📊 Daily CCI Overbought: {daily['CCI']:.1f}{discount_note}")
 
-        # === 4H TIMEFRAME (Lowest Weight) ===
+        # === 4H TIMEFRAME (Lowest Weight) - TREND SIGNALS ===
         if h4["EMA_9"] > h4["EMA_21"]:
-            signals["long"] += WEIGHTS["h4_trend"]
+            weight = int(WEIGHTS["h4_trend"] * trend_multiplier)
+            signals["long"] += weight
             reasons["long"].append("📊 4H Aligned Bullish")
         elif h4["EMA_9"] < h4["EMA_21"]:
-            signals["short"] += WEIGHTS["h4_trend"]
+            weight = int(WEIGHTS["h4_trend"] * trend_multiplier)
+            signals["short"] += weight
             reasons["short"].append("📊 4H Aligned Bearish")
 
         if pd.notna(h4.get("SUPERTREND_DIR")):
             if h4["SUPERTREND_DIR"] == 1:
-                signals["long"] += WEIGHTS["h4_supertrend"]
+                weight = int(WEIGHTS["h4_supertrend"] * trend_multiplier)
+                signals["long"] += weight
                 reasons["long"].append("🚀 4H Supertrend Bullish")
             else:
-                signals["short"] += WEIGHTS["h4_supertrend"]
+                weight = int(WEIGHTS["h4_supertrend"] * trend_multiplier)
+                signals["short"] += weight
                 reasons["short"].append("🔻 4H Supertrend Bearish")
 
         # === ADX TREND STRENGTH ===
@@ -525,13 +680,17 @@ class WeeklyTradingStrategy(BaseStrategy):
                 signals["short"] += 1
                 reasons["short"].append("📉 OBV Distribution")
 
-        # === BOLLINGER BANDS ===
+        # === BOLLINGER BANDS - OSCILLATOR SIGNAL (apply both multipliers) ===
         if daily["close"] < daily["BB_lower"]:
-            signals["long"] += 2
-            reasons["long"].append("📉 Price below BB Lower (Oversold)")
+            weight = int(2 * oscillator_multiplier * oversold_multiplier)
+            signals["long"] += weight
+            discount_note = " [discounted]" if oversold_multiplier < 1 or oscillator_multiplier < 1 else ""
+            reasons["long"].append(f"📉 Price below BB Lower (Oversold){discount_note}")
         elif daily["close"] > daily["BB_upper"]:
-            signals["short"] += 2
-            reasons["short"].append("📈 Price above BB Upper (Overbought)")
+            weight = int(2 * oscillator_multiplier * overbought_multiplier)
+            signals["short"] += weight
+            discount_note = " [discounted]" if overbought_multiplier < 1 or oscillator_multiplier < 1 else ""
+            reasons["short"].append(f"📈 Price above BB Upper (Overbought){discount_note}")
 
         # === ICHIMOKU (weight 2 for cloud, 1 for TK cross) ===
         if pd.notna(daily.get("ICHI_TENKAN")) and pd.notna(daily.get("ICHI_KIJUN")):
@@ -625,31 +784,59 @@ class WeeklyTradingStrategy(BaseStrategy):
                 sl_multiplier = 1.2
                 tp_multiplier = [1.5, 2.5, 3.5]
 
+        # Extract Fibonacci extension levels for targets
+        fib_ext_127 = fib_levels.get("127.2%")
+        fib_ext_161 = fib_levels.get("161.8%")
+        fib_ext_200 = fib_levels.get("200.0%")
+        fib_ext_261 = fib_levels.get("261.8%")
+
         if signal_type == "LONG":
             stop_loss_support = sr["main_support"]
             stop_loss_atr = current_price - (atr_daily * sl_multiplier)
             stop_loss = max(stop_loss_support, stop_loss_atr)
 
-            tp1 = current_price + (atr_daily * tp_multiplier[0])
-            tp2 = current_price + (atr_daily * tp_multiplier[1])
+            # TP1: ATR-based or Fib 127.2% (whichever is closer but profitable)
+            tp1_atr = current_price + (atr_daily * tp_multiplier[0])
+            tp1 = tp1_atr
+            if fib_ext_127 and fib_ext_127 > current_price:
+                tp1 = min(tp1_atr, fib_ext_127)  # Use closer target
+
+            # TP2: ATR-based or Fib 161.8%
+            tp2_atr = current_price + (atr_daily * tp_multiplier[1])
+            tp2 = tp2_atr
+            if fib_ext_161 and fib_ext_161 > current_price:
+                tp2 = max(tp2_atr, fib_ext_161)  # Use Fib if higher
+
+            # TP3: Fib 200% or 261.8% extension (aggressive target)
             tp3 = sr["main_resistance"]
+            if fib_ext_200 and fib_ext_200 > current_price:
+                tp3 = max(tp3, fib_ext_200)
+            if fib_ext_261 and fib_ext_261 > current_price and regime in ["STRONG_UPTREND"]:
+                tp3 = fib_ext_261  # Very aggressive in strong uptrend
 
-            for level, price in fib_levels.items():
-                if price > current_price and "1.272" in level:
-                    tp3 = max(tp3, price)
-
-        else:
+        else:  # SHORT
             stop_loss_resistance = sr["main_resistance"]
             stop_loss_atr = current_price + (atr_daily * sl_multiplier)
             stop_loss = min(stop_loss_resistance, stop_loss_atr)
 
-            tp1 = current_price - (atr_daily * tp_multiplier[0])
-            tp2 = current_price - (atr_daily * tp_multiplier[1])
-            tp3 = sr["main_support"]
+            # TP1: ATR-based or Fib 127.2% (whichever is closer but profitable)
+            tp1_atr = current_price - (atr_daily * tp_multiplier[0])
+            tp1 = tp1_atr
+            if fib_ext_127 and fib_ext_127 < current_price:
+                tp1 = max(tp1_atr, fib_ext_127)  # Use closer target
 
-            for level, price in fib_levels.items():
-                if price < current_price and "1.272" in level:
-                    tp3 = min(tp3, price)
+            # TP2: ATR-based or Fib 161.8%
+            tp2_atr = current_price - (atr_daily * tp_multiplier[1])
+            tp2 = tp2_atr
+            if fib_ext_161 and fib_ext_161 < current_price:
+                tp2 = min(tp2_atr, fib_ext_161)  # Use Fib if lower
+
+            # TP3: Fib 200% or 261.8% extension (aggressive target)
+            tp3 = sr["main_support"]
+            if fib_ext_200 and fib_ext_200 < current_price:
+                tp3 = min(tp3, fib_ext_200)
+            if fib_ext_261 and fib_ext_261 < current_price and regime in ["STRONG_DOWNTREND"]:
+                tp3 = fib_ext_261  # Very aggressive in strong downtrend
 
         return {
             "entry": current_price,
