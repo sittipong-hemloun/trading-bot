@@ -607,37 +607,82 @@ class EmailNotifier:
 
         return "\n".join(html_parts)
 
-    def send_email(self, console_output, mode):
-        """ส่งอีเมล"""
-        try:
-            mode_icon = "📅" if mode.lower() == "weekly" else "🌙"
-            msg = MIMEMultipart("alternative")
-            msg["Subject"] = f"{mode_icon} Crypto Bot - {mode.upper()} Analysis - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-            msg["From"] = self.sender_email
-            msg["To"] = self.recipient_email
+    def send_email(self, console_output, mode, retries=3):
+        """ส่งอีเมล พร้อม retry mechanism"""
+        import time
 
-            # Text version
-            text_part = MIMEText(console_output, "plain", "utf-8")
-            msg.attach(text_part)
+        mode_icon = "📅" if mode.lower() == "weekly" else "🌙"
 
-            # HTML version
-            html_content = self.create_html_email(console_output, mode)
-            html_part = MIMEText(html_content, "html", "utf-8")
-            msg.attach(html_part)
+        # Debug: Check config
+        print(f"\n📧 Preparing {mode.upper()} email...")
+        print(f"   From: {self.sender_email[:3]}***@{self.sender_email.split('@')[-1] if '@' in self.sender_email else 'N/A'}")
+        print(f"   To: {self.recipient_email}")
+        print(f"   Password configured: {'Yes' if self.sender_password else 'No'}")
 
-            # ส่งอีเมล
-            with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
-                server.starttls()
-                server.login(self.sender_email, self.sender_password)
-                server.sendmail(self.sender_email, self.recipient_email, msg.as_string())
-
-            print("\n" + "=" * 50)
-            print(f"📧 {mode.upper()} EMAIL SENT SUCCESSFULLY!")
-            print(f"   To: {self.recipient_email}")
-            print("=" * 50)
-            return True
-
-        except Exception as e:
-            print(f"\n❌ Failed to send email: {e}")
-            print("💡 Make sure you have set up App Password for Gmail")
+        if not self.sender_email or not self.sender_password:
+            print("❌ Email credentials not configured!")
             return False
+
+        for attempt in range(1, retries + 1):
+            try:
+                print(f"   Attempt {attempt}/{retries}...")
+
+                msg = MIMEMultipart("alternative")
+                msg["Subject"] = f"{mode_icon} Crypto Bot - {mode.upper()} Analysis - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                msg["From"] = self.sender_email
+                msg["To"] = self.recipient_email
+
+                # Text version
+                text_part = MIMEText(console_output, "plain", "utf-8")
+                msg.attach(text_part)
+
+                # HTML version
+                html_content = self.create_html_email(console_output, mode)
+                html_part = MIMEText(html_content, "html", "utf-8")
+                msg.attach(html_part)
+
+                # ส่งอีเมล with timeout
+                print("   Connecting to SMTP server...")
+                with smtplib.SMTP(self.smtp_server, self.smtp_port, timeout=30) as server:
+                    server.set_debuglevel(0)  # Set to 1 for verbose debug
+                    print("   Starting TLS...")
+                    server.starttls()
+                    print("   Logging in...")
+                    server.login(self.sender_email, self.sender_password)
+                    print("   Sending email...")
+                    server.sendmail(self.sender_email, self.recipient_email, msg.as_string())
+
+                print("\n" + "=" * 50)
+                print(f"📧 {mode.upper()} EMAIL SENT SUCCESSFULLY!")
+                print(f"   To: {self.recipient_email}")
+                print("=" * 50)
+                return True
+
+            except smtplib.SMTPAuthenticationError as e:
+                print(f"\n❌ Authentication failed: {e}")
+                print("💡 Check your App Password - it may be invalid or expired")
+                print("💡 Make sure 2FA is enabled on your Google account")
+                print("💡 Generate a new App Password at: https://myaccount.google.com/apppasswords")
+                return False  # Don't retry auth errors
+
+            except smtplib.SMTPRecipientsRefused as e:
+                print(f"\n❌ Recipient refused: {e}")
+                return False  # Don't retry recipient errors
+
+            except (smtplib.SMTPException, ConnectionError, TimeoutError) as e:
+                print(f"\n⚠️ Attempt {attempt} failed: {type(e).__name__}: {e}")
+                if attempt < retries:
+                    wait_time = attempt * 5
+                    print(f"   Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"\n❌ Failed to send email after {retries} attempts")
+                    print("💡 This might be due to network restrictions on GitHub Actions")
+                    print("💡 Consider using a different email service (SendGrid, Mailgun, etc.)")
+                    return False
+
+            except Exception as e:
+                print(f"\n❌ Unexpected error: {type(e).__name__}: {e}")
+                return False
+
+        return False
