@@ -5,8 +5,10 @@ Contains WeeklyTradingStrategy and MonthlyTradingStrategy classes
 
 import requests
 import pandas as pd
+import numpy as np
 import pandas_ta as ta
 from datetime import timedelta
+from typing import Literal
 
 
 class WeeklyTradingStrategy:
@@ -126,12 +128,16 @@ class WeeklyTradingStrategy:
         df["WILLR"] = ta.willr(df["high"], df["low"], df["close"], length=14)
 
         # === Ichimoku Cloud ===
-        ichimoku = ta.ichimoku(df["high"], df["low"], df["close"])
-        if ichimoku is not None and len(ichimoku) >= 2:
-            df["ICHI_TENKAN"] = ichimoku[0]["ITS_9"]
-            df["ICHI_KIJUN"] = ichimoku[0]["IKS_26"]
-            df["ICHI_SENKOU_A"] = ichimoku[0]["ISA_9"]
-            df["ICHI_SENKOU_B"] = ichimoku[0]["ISB_26"]
+        try:
+            ichimoku = ta.ichimoku(df["high"], df["low"], df["close"])
+            if ichimoku is not None and len(ichimoku) >= 2 and ichimoku[0] is not None:
+                df["ICHI_TENKAN"] = ichimoku[0]["ITS_9"]
+                df["ICHI_KIJUN"] = ichimoku[0]["IKS_26"]
+                df["ICHI_SENKOU_A"] = ichimoku[0]["ISA_9"]
+                df["ICHI_SENKOU_B"] = ichimoku[0]["ISB_26"]
+        except (TypeError, KeyError):
+            # Ichimoku ต้องการข้อมูลจำนวนมาก ถ้าไม่พอก็ข้าม
+            pass
 
         # === VWAP (Volume Weighted Average Price) ===
         # VWAP requires DatetimeIndex, so we calculate manually
@@ -265,22 +271,244 @@ class WeeklyTradingStrategy:
         return True
 
     def check_divergence(self, df, indicator="RSI", lookback=14):
-        """ตรวจสอบ Divergence (Bullish/Bearish)"""
-        price = df["close"].tail(lookback)
-        ind = df[indicator].tail(lookback)
+        """ตรวจสอบ Divergence แบบปรับปรุง - หา Swing Points จริงๆ"""
+        if len(df) < lookback + 5:
+            return None, 0
 
-        price_higher_high = price.iloc[-1] > price.iloc[0]
-        price_lower_low = price.iloc[-1] < price.iloc[0]
-        ind_higher_high = ind.iloc[-1] > ind.iloc[0]
-        ind_lower_low = ind.iloc[-1] < ind.iloc[0]
+        recent = df.tail(lookback + 5).copy()
+        recent = recent.reset_index(drop=True)
 
-        if price_lower_low and not ind_lower_low:
-            return "bullish"
+        # หา Swing Lows และ Swing Highs (อย่างน้อย 2 แท่งซ้ายขวา)
+        swing_lows = []
+        swing_highs = []
 
-        if price_higher_high and not ind_higher_high:
-            return "bearish"
+        for i in range(2, len(recent) - 2):
+            # Swing Low
+            if (recent.iloc[i]["low"] < recent.iloc[i-1]["low"] and
+                recent.iloc[i]["low"] < recent.iloc[i-2]["low"] and
+                recent.iloc[i]["low"] < recent.iloc[i+1]["low"] and
+                recent.iloc[i]["low"] < recent.iloc[i+2]["low"]):
+                swing_lows.append({
+                    "idx": i,
+                    "price": recent.iloc[i]["low"],
+                    "indicator": recent.iloc[i][indicator] if pd.notna(recent.iloc[i].get(indicator)) else None
+                })
 
-        return None
+            # Swing High
+            if (recent.iloc[i]["high"] > recent.iloc[i-1]["high"] and
+                recent.iloc[i]["high"] > recent.iloc[i-2]["high"] and
+                recent.iloc[i]["high"] > recent.iloc[i+1]["high"] and
+                recent.iloc[i]["high"] > recent.iloc[i+2]["high"]):
+                swing_highs.append({
+                    "idx": i,
+                    "price": recent.iloc[i]["high"],
+                    "indicator": recent.iloc[i][indicator] if pd.notna(recent.iloc[i].get(indicator)) else None
+                })
+
+        # ตรวจสอบ Bullish Divergence (ราคาทำ Lower Low แต่ Indicator ทำ Higher Low)
+        if len(swing_lows) >= 2:
+            last_two_lows = swing_lows[-2:]
+            if (last_two_lows[1]["price"] < last_two_lows[0]["price"] and
+                last_two_lows[1]["indicator"] is not None and
+                last_two_lows[0]["indicator"] is not None and
+                last_two_lows[1]["indicator"] > last_two_lows[0]["indicator"]):
+                # คำนวณความแข็งแกร่งของ Divergence
+                price_diff = abs(last_two_lows[1]["price"] - last_two_lows[0]["price"]) / last_two_lows[0]["price"] * 100
+                ind_diff = abs(last_two_lows[1]["indicator"] - last_two_lows[0]["indicator"])
+                strength = min(100, price_diff * 10 + ind_diff)
+                return "bullish", strength
+
+        # ตรวจสอบ Bearish Divergence (ราคาทำ Higher High แต่ Indicator ทำ Lower High)
+        if len(swing_highs) >= 2:
+            last_two_highs = swing_highs[-2:]
+            if (last_two_highs[1]["price"] > last_two_highs[0]["price"] and
+                last_two_highs[1]["indicator"] is not None and
+                last_two_highs[0]["indicator"] is not None and
+                last_two_highs[1]["indicator"] < last_two_highs[0]["indicator"]):
+                price_diff = abs(last_two_highs[1]["price"] - last_two_highs[0]["price"]) / last_two_highs[0]["price"] * 100
+                ind_diff = abs(last_two_highs[1]["indicator"] - last_two_highs[0]["indicator"])
+                strength = min(100, price_diff * 10 + ind_diff)
+                return "bearish", strength
+
+        return None, 0
+
+    def detect_market_regime(self, df):
+        """ตรวจจับสภาวะตลาด: Trending, Ranging, หรือ Volatile"""
+        latest = df.iloc[-1]
+        lookback = min(20, len(df) - 1)
+
+        # วิเคราะห์ ADX สำหรับ Trend Strength
+        adx = latest["ADX"] if pd.notna(latest.get("ADX")) else 20
+
+        # วิเคราะห์ Bollinger Band Width สำหรับ Volatility
+        bb_width = latest["BB_width"] if pd.notna(latest.get("BB_width")) else 5
+        avg_bb_width = df["BB_width"].tail(lookback).mean() if "BB_width" in df.columns else 5
+
+        # วิเคราะห์ ATR Percent
+        atr_pct = latest["ATR_percent"] if pd.notna(latest.get("ATR_percent")) else 3
+        avg_atr_pct = df["ATR_percent"].tail(lookback).mean() if "ATR_percent" in df.columns else 3
+
+        # วิเคราะห์ Price Range
+        recent_high = df["high"].tail(lookback).max()
+        recent_low = df["low"].tail(lookback).min()
+        price_range_pct = (recent_high - recent_low) / recent_low * 100
+
+        # ตัดสินสภาวะตลาด
+        if adx > 25 and (latest["DI_plus"] - latest["DI_minus"]) > 5:
+            regime = "STRONG_UPTREND"
+            confidence = min(100, adx + 20)
+        elif adx > 25 and (latest["DI_minus"] - latest["DI_plus"]) > 5:
+            regime = "STRONG_DOWNTREND"
+            confidence = min(100, adx + 20)
+        elif adx < 20 and bb_width < avg_bb_width * 0.8:
+            regime = "CONSOLIDATION"  # ตลาด Sideways แคบๆ
+            confidence = 80 - adx
+        elif bb_width > avg_bb_width * 1.5 or atr_pct > avg_atr_pct * 1.5:
+            regime = "HIGH_VOLATILITY"
+            confidence = min(100, bb_width / avg_bb_width * 50)
+        elif adx >= 20 and adx <= 25:
+            regime = "WEAK_TREND"
+            confidence = 50
+        else:
+            regime = "RANGING"
+            confidence = 60
+
+        return {
+            "regime": regime,
+            "confidence": confidence,
+            "adx": adx,
+            "bb_width": bb_width,
+            "atr_percent": atr_pct,
+            "price_range_pct": price_range_pct
+        }
+
+    def analyze_historical_performance(self, df, lookback=50):
+        """วิเคราะห์ประสิทธิภาพของสัญญาณในอดีต"""
+        if len(df) < lookback + 20:
+            return {"win_rate": 50, "avg_return": 0, "max_drawdown": 0, "sharpe": 0}
+
+        historical = df.tail(lookback + 20).copy()
+        historical = historical.reset_index(drop=True)
+
+        # จำลองสัญญาณในอดีต
+        signals = []
+        for i in range(20, len(historical) - 5):
+            row = historical.iloc[i]
+            prev = historical.iloc[i-1]
+
+            # สัญญาณ Long เบื้องต้น
+            if (row["EMA_9"] > row["EMA_21"] and prev["EMA_9"] <= prev["EMA_21"]):
+                signals.append({"idx": i, "type": "long", "entry": row["close"]})
+            # สัญญาณ Short เบื้องต้น
+            elif (row["EMA_9"] < row["EMA_21"] and prev["EMA_9"] >= prev["EMA_21"]):
+                signals.append({"idx": i, "type": "short", "entry": row["close"]})
+
+        # คำนวณผลลัพธ์ของแต่ละสัญญาณ (ดู 5 แท่งข้างหน้า)
+        wins = 0
+        losses = 0
+        returns = []
+
+        for signal in signals:
+            if signal["idx"] + 5 >= len(historical):
+                continue
+
+            future_price = historical.iloc[signal["idx"] + 5]["close"]
+            entry = signal["entry"]
+
+            if signal["type"] == "long":
+                ret = (future_price - entry) / entry * 100
+            else:
+                ret = (entry - future_price) / entry * 100
+
+            returns.append(ret)
+            if ret > 0:
+                wins += 1
+            else:
+                losses += 1
+
+        total = wins + losses
+        win_rate = (wins / total * 100) if total > 0 else 50
+        avg_return = np.mean(returns) if returns else 0
+
+        # คำนวณ Max Drawdown
+        cumulative = np.cumsum(returns) if returns else [0]
+        peak = np.maximum.accumulate(cumulative)
+        drawdown = peak - cumulative
+        max_drawdown = np.max(drawdown) if len(drawdown) > 0 else 0
+
+        # คำนวณ Sharpe Ratio (simplified)
+        if len(returns) > 1 and np.std(returns) > 0:
+            sharpe = avg_return / np.std(returns) * np.sqrt(52)  # Annualized สำหรับ Weekly
+        else:
+            sharpe = 0
+
+        return {
+            "win_rate": win_rate,
+            "avg_return": avg_return,
+            "max_drawdown": max_drawdown,
+            "sharpe": sharpe,
+            "total_signals": total
+        }
+
+    def check_trend_consistency(self, lookback=10):
+        """ตรวจสอบความสอดคล้องของ Trend ในหลาย Timeframes"""
+        if not self.data:
+            return {"consistent": False, "direction": "neutral", "score": 0}
+
+        scores = {"bullish": 0, "bearish": 0}
+        weights = {"weekly": 3, "daily": 2, "h4": 1}
+
+        for tf, weight in weights.items():
+            if tf not in self.data or self.data[tf] is None:
+                continue
+
+            df = self.data[tf]
+            if len(df) < lookback:
+                continue
+
+            recent = df.tail(lookback)
+            latest = df.iloc[-1]
+
+            # EMA Trend
+            if latest["EMA_9"] > latest["EMA_21"]:
+                scores["bullish"] += weight * 2
+            else:
+                scores["bearish"] += weight * 2
+
+            # MACD
+            if latest["MACD"] > latest["MACD_signal"]:
+                scores["bullish"] += weight
+            else:
+                scores["bearish"] += weight
+
+            # Price vs EMA
+            if latest["close"] > latest["EMA_21"]:
+                scores["bullish"] += weight
+            else:
+                scores["bearish"] += weight
+
+            # Trend ต่อเนื่อง (Higher Highs/Higher Lows หรือ Lower Highs/Lower Lows)
+            higher_highs = sum(1 for i in range(1, len(recent)) if recent.iloc[i]["high"] > recent.iloc[i-1]["high"])
+            lower_lows = sum(1 for i in range(1, len(recent)) if recent.iloc[i]["low"] < recent.iloc[i-1]["low"])
+
+            if higher_highs > len(recent) * 0.6:
+                scores["bullish"] += weight
+            if lower_lows > len(recent) * 0.6:
+                scores["bearish"] += weight
+
+        total_score = scores["bullish"] + scores["bearish"]
+        if total_score == 0:
+            return {"consistent": False, "direction": "neutral", "score": 0}
+
+        bullish_pct = scores["bullish"] / total_score * 100
+        bearish_pct = scores["bearish"] / total_score * 100
+
+        if bullish_pct >= 70:
+            return {"consistent": True, "direction": "bullish", "score": bullish_pct}
+        elif bearish_pct >= 70:
+            return {"consistent": True, "direction": "bearish", "score": bearish_pct}
+        else:
+            return {"consistent": False, "direction": "mixed", "score": max(bullish_pct, bearish_pct)}
 
     def get_trend_strength(self, df):
         """วิเคราะห์ความแข็งแกร่งของ Trend"""
@@ -320,8 +548,38 @@ class WeeklyTradingStrategy:
 
         return score, max_score
 
+    def get_weighted_signal_score(
+        self,
+        base_score: int,
+        timeframe: Literal["weekly", "daily", "h4"],
+        market_regime: dict,
+        historical_perf: dict
+    ) -> float:
+        """คำนวณคะแนนสัญญาณแบบถ่วงน้ำหนัก"""
+        # น้ำหนักตาม Timeframe
+        tf_weights = {"weekly": 1.5, "daily": 1.2, "h4": 1.0}
+        weight = tf_weights.get(timeframe, 1.0)
+
+        # ปรับตาม Market Regime
+        regime = market_regime.get("regime", "RANGING")
+        if regime in ["STRONG_UPTREND", "STRONG_DOWNTREND"]:
+            weight *= 1.3  # Trend-following signals มีน้ำหนักมากขึ้น
+        elif regime == "HIGH_VOLATILITY":
+            weight *= 0.7  # ลดน้ำหนักในช่วง Volatile
+        elif regime == "CONSOLIDATION":
+            weight *= 0.8  # ลดน้ำหนักในช่วง Sideways
+
+        # ปรับตาม Historical Performance
+        win_rate = historical_perf.get("win_rate", 50)
+        if win_rate >= 60:
+            weight *= 1.2
+        elif win_rate < 40:
+            weight *= 0.8
+
+        return base_score * weight
+
     def get_weekly_signal(self):
-        """วิเคราะห์สัญญาณ Weekly แบบปรับปรุง"""
+        """วิเคราะห์สัญญาณ Weekly แบบปรับปรุง พร้อมข้อมูลย้อนหลัง"""
 
         weekly = self.data["weekly"].iloc[-1]
         daily = self.data["daily"].iloc[-1]
@@ -330,8 +588,35 @@ class WeeklyTradingStrategy:
         weekly_prev = self.data["weekly"].iloc[-2]
         daily_prev = self.data["daily"].iloc[-2]
 
+        # วิเคราะห์ Market Regime และ Historical Performance
+        market_regime = self.detect_market_regime(self.data["daily"])
+        historical_perf = self.analyze_historical_performance(self.data["daily"])
+        trend_consistency = self.check_trend_consistency()
+
         signals = {"long": 0, "short": 0, "neutral": 0}
         reasons = {"long": [], "short": [], "neutral": []}
+
+        # เพิ่มข้อมูล Market Context
+        regime_text = market_regime["regime"].replace("_", " ")
+        reasons["neutral"].append(f"📈 Market Regime: {regime_text} ({market_regime['confidence']:.0f}%)")
+
+        if historical_perf["total_signals"] > 0:
+            reasons["neutral"].append(
+                f"📊 Historical: Win Rate {historical_perf['win_rate']:.1f}%, "
+                f"Avg Return {historical_perf['avg_return']:.2f}%"
+            )
+
+        if trend_consistency["consistent"]:
+            direction = trend_consistency["direction"]
+            if direction == "bullish":
+                signals["long"] += 3
+                reasons["long"].append(f"✅ Trend Consistency: Strong Bullish ({trend_consistency['score']:.0f}%)")
+            elif direction == "bearish":
+                signals["short"] += 3
+                reasons["short"].append(f"✅ Trend Consistency: Strong Bearish ({trend_consistency['score']:.0f}%)")
+        else:
+            signals["neutral"] += 1
+            reasons["neutral"].append(f"⚠️ Mixed Trend ({trend_consistency['score']:.0f}%)")
 
         # === WEEKLY TIMEFRAME ANALYSIS ===
         if weekly["EMA_9"] > weekly["EMA_21"]:
@@ -393,7 +678,7 @@ class WeeklyTradingStrategy:
             signals["short"] += 2
             reasons["short"].append("📉 Daily Downtrend")
 
-        daily_divergence = self.check_divergence(self.data["daily"], "RSI")
+        # RSI Analysis with Divergence
         if daily["RSI"] < 30:
             signals["long"] += 3
             reasons["long"].append(f"💪 Daily RSI Oversold: {daily['RSI']:.1f}")
@@ -401,12 +686,26 @@ class WeeklyTradingStrategy:
             signals["short"] += 3
             reasons["short"].append(f"⚠️ Daily RSI Overbought: {daily['RSI']:.1f}")
 
-        if daily_divergence == "bullish":
+        # Divergence Detection แบบปรับปรุง
+        daily_divergence, div_strength = self.check_divergence(self.data["daily"], "RSI")
+        if daily_divergence == "bullish" and div_strength > 0:
+            # คะแนนตามความแข็งแกร่งของ Divergence
+            div_score = 2 if div_strength < 30 else 3 if div_strength < 60 else 4
+            signals["long"] += div_score
+            reasons["long"].append(f"🔄 Daily Bullish Divergence (Strength: {div_strength:.0f})")
+        elif daily_divergence == "bearish" and div_strength > 0:
+            div_score = 2 if div_strength < 30 else 3 if div_strength < 60 else 4
+            signals["short"] += div_score
+            reasons["short"].append(f"🔄 Daily Bearish Divergence (Strength: {div_strength:.0f})")
+
+        # ตรวจสอบ MACD Divergence ด้วย
+        macd_divergence, macd_div_strength = self.check_divergence(self.data["daily"], "MACD", lookback=20)
+        if macd_divergence == "bullish" and macd_div_strength > 20:
             signals["long"] += 2
-            reasons["long"].append("🔄 Daily Bullish Divergence")
-        elif daily_divergence == "bearish":
+            reasons["long"].append("🔄 MACD Bullish Divergence")
+        elif macd_divergence == "bearish" and macd_div_strength > 20:
             signals["short"] += 2
-            reasons["short"].append("🔄 Daily Bearish Divergence")
+            reasons["short"].append("🔄 MACD Bearish Divergence")
 
         if daily_prev["MACD"] <= daily_prev["MACD_signal"] and daily["MACD"] > daily["MACD_signal"]:
             signals["long"] += 2
@@ -502,6 +801,41 @@ class WeeklyTradingStrategy:
 
         return signals, reasons
 
+    def calculate_volatility_adjusted_risk(self, df, base_risk_pct=2.0):
+        """คำนวณ Risk ที่ปรับตาม Volatility"""
+        latest = df.iloc[-1]
+        lookback = min(20, len(df) - 1)
+
+        # Current vs Average Volatility
+        current_atr_pct = latest["ATR_percent"] if pd.notna(latest.get("ATR_percent")) else 3
+        avg_atr_pct = df["ATR_percent"].tail(lookback).mean() if "ATR_percent" in df.columns else 3
+
+        volatility_ratio = current_atr_pct / avg_atr_pct if avg_atr_pct > 0 else 1
+
+        # ปรับ Risk ตาม Volatility
+        if volatility_ratio > 1.5:
+            # Volatility สูงกว่าปกติ - ลด Risk
+            adjusted_risk = base_risk_pct * 0.6
+            risk_note = "High Volatility - Reduced Risk"
+        elif volatility_ratio > 1.2:
+            adjusted_risk = base_risk_pct * 0.8
+            risk_note = "Elevated Volatility - Slightly Reduced Risk"
+        elif volatility_ratio < 0.7:
+            # Volatility ต่ำกว่าปกติ - เพิ่ม Risk ได้นิดหน่อย
+            adjusted_risk = base_risk_pct * 1.2
+            risk_note = "Low Volatility - Slightly Increased Risk"
+        else:
+            adjusted_risk = base_risk_pct
+            risk_note = "Normal Volatility"
+
+        return {
+            "adjusted_risk_pct": min(adjusted_risk, 3.0),  # Cap at 3%
+            "volatility_ratio": volatility_ratio,
+            "current_atr_pct": current_atr_pct,
+            "avg_atr_pct": avg_atr_pct,
+            "risk_note": risk_note
+        }
+
     def calculate_position_management(self, current_price, signal_type):
         """คำนวณการจัดการ Position สำหรับ Weekly แบบปรับปรุง"""
 
@@ -512,16 +846,50 @@ class WeeklyTradingStrategy:
         sr = self.calculate_support_resistance(daily_df)
         fib_levels, fib_trend = self.calculate_fibonacci_levels(daily_df)
 
+        # Market Regime สำหรับปรับ Strategy
+        market_regime = self.detect_market_regime(daily_df)
+
+        # Volatility-adjusted Risk
+        vol_risk = self.calculate_volatility_adjusted_risk(daily_df)
+
         atr_percent = daily["ATR_percent"]
-        if atr_percent > 5:
-            sl_multiplier = 2.0
-            tp_multiplier = [2.5, 4, 6]
-        elif atr_percent > 3:
-            sl_multiplier = 1.5
-            tp_multiplier = [2, 3, 4]
+
+        # ปรับ Multipliers ตาม Market Regime
+        regime = market_regime["regime"]
+        if regime in ["STRONG_UPTREND", "STRONG_DOWNTREND"]:
+            # Trending market - wider stops, bigger targets
+            if atr_percent > 5:
+                sl_multiplier = 2.5
+                tp_multiplier = [3, 5, 8]
+            elif atr_percent > 3:
+                sl_multiplier = 2.0
+                tp_multiplier = [2.5, 4, 6]
+            else:
+                sl_multiplier = 1.5
+                tp_multiplier = [2, 3, 5]
+        elif regime == "HIGH_VOLATILITY":
+            # High volatility - wider stops
+            if atr_percent > 5:
+                sl_multiplier = 3.0
+                tp_multiplier = [2, 3, 4]
+            else:
+                sl_multiplier = 2.5
+                tp_multiplier = [1.5, 2.5, 3.5]
+        elif regime == "CONSOLIDATION":
+            # Consolidation - tighter stops
+            sl_multiplier = 1.0
+            tp_multiplier = [1.2, 2, 2.5]
         else:
-            sl_multiplier = 1.2
-            tp_multiplier = [1.5, 2.5, 3.5]
+            # Default
+            if atr_percent > 5:
+                sl_multiplier = 2.0
+                tp_multiplier = [2.5, 4, 6]
+            elif atr_percent > 3:
+                sl_multiplier = 1.5
+                tp_multiplier = [2, 3, 4]
+            else:
+                sl_multiplier = 1.2
+                tp_multiplier = [1.5, 2.5, 3.5]
 
         if signal_type == "LONG":
             stop_loss_support = sr["main_support"]
@@ -560,6 +928,8 @@ class WeeklyTradingStrategy:
             "support_resistance": sr,
             "fibonacci": fib_levels,
             "fib_trend": fib_trend,
+            "market_regime": market_regime,
+            "volatility_risk": vol_risk,
         }
 
     def get_confidence_level(self, signals):
@@ -706,7 +1076,7 @@ class WeeklyTradingStrategy:
         print("=" * 100)
 
     def _print_trade_setup(self, position_mgmt, signal_type, balance, current_price):
-        """พิมพ์ Trade Setup"""
+        """พิมพ์ Trade Setup พร้อมข้อมูล Advanced Analysis"""
         entry = position_mgmt["entry"]
         sl = position_mgmt["stop_loss"]
         tp1 = position_mgmt["tp1"]
@@ -724,7 +1094,28 @@ class WeeklyTradingStrategy:
             tp2_pct = ((entry - tp2) / entry) * 100
             tp3_pct = ((entry - tp3) / entry) * 100
 
-        print(f"\n📊 Volatility: {position_mgmt['atr_percent']:.2f}% (ATR: ${position_mgmt['atr']:,.2f})")
+        # Market Regime Info
+        if "market_regime" in position_mgmt:
+            regime = position_mgmt["market_regime"]
+            regime_text = regime["regime"].replace("_", " ")
+            print("\n🌍 MARKET CONTEXT:")
+            print(f"  • Regime: {regime_text} ({regime['confidence']:.0f}% confidence)")
+            print(f"  • ADX: {regime['adx']:.1f} | BB Width: {regime['bb_width']:.2f}%")
+            print(f"  • Price Range (20d): {regime['price_range_pct']:.1f}%")
+
+        # Volatility Info
+        if "volatility_risk" in position_mgmt:
+            vol = position_mgmt["volatility_risk"]
+            vol_status = "🔴" if vol["volatility_ratio"] > 1.3 else "🟢" if vol["volatility_ratio"] < 0.8 else "🟡"
+            print("\n📊 VOLATILITY ANALYSIS:")
+            print(f"  • Current ATR: {vol['current_atr_pct']:.2f}% | Avg: {vol['avg_atr_pct']:.2f}%")
+            print(f"  • Volatility Ratio: {vol_status} {vol['volatility_ratio']:.2f}x")
+            print(f"  • Risk Adjustment: {vol['risk_note']}")
+            adjusted_risk = vol["adjusted_risk_pct"]
+        else:
+            adjusted_risk = 2.0
+
+        print(f"\n📊 ATR: ${position_mgmt['atr']:,.2f} ({position_mgmt['atr_percent']:.2f}%)")
 
         print("\n💼 TRADE SETUP:")
         print(f"  🎯 Entry: ${entry:,.2f}")
@@ -733,14 +1124,15 @@ class WeeklyTradingStrategy:
         print(f"  🎁 TP2 (30%): ${tp2:,.2f} ({tp2_pct:+.2f}% = {tp2_pct * self.leverage:+.1f}% margin)")
         print(f"  🎁 TP3 (30%): ${tp3:,.2f} ({tp3_pct:+.2f}% = {tp3_pct * self.leverage:+.1f}% margin)")
 
-        risk_pct = 2
+        # ใช้ Volatility-adjusted Risk
+        risk_pct = adjusted_risk
         risk_amount = balance * (risk_pct / 100)
         position_size = (risk_amount / (abs(sl_pct) / 100)) * self.leverage
         margin_required = position_size / self.leverage
 
         print(f"\n💰 POSITION MANAGEMENT (Balance: ${balance:,.2f}):")
         print(f"  📊 Leverage: {self.leverage}x")
-        print(f"  📊 Risk per Trade: {risk_pct}% (${risk_amount:,.2f})")
+        print(f"  📊 Risk per Trade: {risk_pct:.1f}% (${risk_amount:,.2f}) - Volatility Adjusted")
         print(f"  📊 Margin Required: ${margin_required:,.2f}")
         print(f"  📊 Position Size: ${position_size:,.2f}")
 
@@ -946,23 +1338,174 @@ class MonthlyTradingStrategy:
         return True
 
     def check_divergence(self, df, indicator="RSI", lookback=14):
-        """ตรวจสอบ Divergence"""
-        price = df["close"].tail(lookback)
-        ind = df[indicator].tail(lookback)
+        """ตรวจสอบ Divergence แบบปรับปรุง - หา Swing Points จริงๆ"""
+        if len(df) < lookback + 5:
+            return None, 0
 
-        price_higher_high = price.iloc[-1] > price.iloc[0]
-        price_lower_low = price.iloc[-1] < price.iloc[0]
-        ind_higher_high = ind.iloc[-1] > ind.iloc[0]
-        ind_lower_low = ind.iloc[-1] < ind.iloc[0]
+        recent = df.tail(lookback + 5).copy()
+        recent = recent.reset_index(drop=True)
 
-        if price_lower_low and not ind_lower_low:
-            return "bullish"
-        if price_higher_high and not ind_higher_high:
-            return "bearish"
-        return None
+        swing_lows = []
+        swing_highs = []
+
+        for i in range(2, len(recent) - 2):
+            if (recent.iloc[i]["low"] < recent.iloc[i-1]["low"] and
+                recent.iloc[i]["low"] < recent.iloc[i-2]["low"] and
+                recent.iloc[i]["low"] < recent.iloc[i+1]["low"] and
+                recent.iloc[i]["low"] < recent.iloc[i+2]["low"]):
+                swing_lows.append({
+                    "idx": i,
+                    "price": recent.iloc[i]["low"],
+                    "indicator": recent.iloc[i][indicator] if pd.notna(recent.iloc[i].get(indicator)) else None
+                })
+
+            if (recent.iloc[i]["high"] > recent.iloc[i-1]["high"] and
+                recent.iloc[i]["high"] > recent.iloc[i-2]["high"] and
+                recent.iloc[i]["high"] > recent.iloc[i+1]["high"] and
+                recent.iloc[i]["high"] > recent.iloc[i+2]["high"]):
+                swing_highs.append({
+                    "idx": i,
+                    "price": recent.iloc[i]["high"],
+                    "indicator": recent.iloc[i][indicator] if pd.notna(recent.iloc[i].get(indicator)) else None
+                })
+
+        if len(swing_lows) >= 2:
+            last_two_lows = swing_lows[-2:]
+            if (last_two_lows[1]["price"] < last_two_lows[0]["price"] and
+                last_two_lows[1]["indicator"] is not None and
+                last_two_lows[0]["indicator"] is not None and
+                last_two_lows[1]["indicator"] > last_two_lows[0]["indicator"]):
+                price_diff = abs(last_two_lows[1]["price"] - last_two_lows[0]["price"]) / last_two_lows[0]["price"] * 100
+                ind_diff = abs(last_two_lows[1]["indicator"] - last_two_lows[0]["indicator"])
+                strength = min(100, price_diff * 10 + ind_diff)
+                return "bullish", strength
+
+        if len(swing_highs) >= 2:
+            last_two_highs = swing_highs[-2:]
+            if (last_two_highs[1]["price"] > last_two_highs[0]["price"] and
+                last_two_highs[1]["indicator"] is not None and
+                last_two_highs[0]["indicator"] is not None and
+                last_two_highs[1]["indicator"] < last_two_highs[0]["indicator"]):
+                price_diff = abs(last_two_highs[1]["price"] - last_two_highs[0]["price"]) / last_two_highs[0]["price"] * 100
+                ind_diff = abs(last_two_highs[1]["indicator"] - last_two_highs[0]["indicator"])
+                strength = min(100, price_diff * 10 + ind_diff)
+                return "bearish", strength
+
+        return None, 0
+
+    def detect_market_regime(self, df):
+        """ตรวจจับสภาวะตลาด"""
+        latest = df.iloc[-1]
+        lookback = min(20, len(df) - 1)
+
+        adx = latest["ADX"] if pd.notna(latest.get("ADX")) else 20
+        atr_pct = latest["ATR_percent"] if pd.notna(latest.get("ATR_percent")) else 3
+
+        recent_high = df["high"].tail(lookback).max()
+        recent_low = df["low"].tail(lookback).min()
+        price_range_pct = (recent_high - recent_low) / recent_low * 100
+
+        if adx > 25 and (latest["DI_plus"] - latest["DI_minus"]) > 5:
+            regime = "STRONG_UPTREND"
+            confidence = min(100, adx + 20)
+        elif adx > 25 and (latest["DI_minus"] - latest["DI_plus"]) > 5:
+            regime = "STRONG_DOWNTREND"
+            confidence = min(100, adx + 20)
+        elif adx < 20:
+            regime = "RANGING"
+            confidence = 60
+        else:
+            regime = "WEAK_TREND"
+            confidence = 50
+
+        return {
+            "regime": regime,
+            "confidence": confidence,
+            "adx": adx,
+            "atr_percent": atr_pct,
+            "price_range_pct": price_range_pct
+        }
+
+    def analyze_historical_performance(self, df, lookback=50):
+        """วิเคราะห์ประสิทธิภาพของสัญญาณในอดีต"""
+        if len(df) < lookback + 20:
+            return {"win_rate": 50, "avg_return": 0, "max_drawdown": 0, "total_signals": 0}
+
+        historical = df.tail(lookback + 20).copy()
+        historical = historical.reset_index(drop=True)
+
+        signals = []
+        for i in range(20, len(historical) - 5):
+            row = historical.iloc[i]
+            prev = historical.iloc[i-1]
+
+            if (row["EMA_12"] > row["EMA_26"] and prev["EMA_12"] <= prev["EMA_26"]):
+                signals.append({"idx": i, "type": "long", "entry": row["close"]})
+            elif (row["EMA_12"] < row["EMA_26"] and prev["EMA_12"] >= prev["EMA_26"]):
+                signals.append({"idx": i, "type": "short", "entry": row["close"]})
+
+        wins = 0
+        returns = []
+
+        for signal in signals:
+            if signal["idx"] + 5 >= len(historical):
+                continue
+
+            future_price = historical.iloc[signal["idx"] + 5]["close"]
+            entry = signal["entry"]
+
+            if signal["type"] == "long":
+                ret = (future_price - entry) / entry * 100
+            else:
+                ret = (entry - future_price) / entry * 100
+
+            returns.append(ret)
+            if ret > 0:
+                wins += 1
+
+        total = len(returns)
+        win_rate = (wins / total * 100) if total > 0 else 50
+        avg_return = np.mean(returns) if returns else 0
+
+        return {
+            "win_rate": win_rate,
+            "avg_return": avg_return,
+            "total_signals": total
+        }
+
+    def calculate_volatility_adjusted_risk(self, df, base_risk_pct=2.0):
+        """คำนวณ Risk ที่ปรับตาม Volatility"""
+        latest = df.iloc[-1]
+        lookback = min(20, len(df) - 1)
+
+        current_atr_pct = latest["ATR_percent"] if pd.notna(latest.get("ATR_percent")) else 3
+        avg_atr_pct = df["ATR_percent"].tail(lookback).mean() if "ATR_percent" in df.columns else 3
+
+        volatility_ratio = current_atr_pct / avg_atr_pct if avg_atr_pct > 0 else 1
+
+        if volatility_ratio > 1.5:
+            adjusted_risk = base_risk_pct * 0.6
+            risk_note = "High Volatility - Reduced Risk"
+        elif volatility_ratio > 1.2:
+            adjusted_risk = base_risk_pct * 0.8
+            risk_note = "Elevated Volatility"
+        elif volatility_ratio < 0.7:
+            adjusted_risk = base_risk_pct * 1.2
+            risk_note = "Low Volatility"
+        else:
+            adjusted_risk = base_risk_pct
+            risk_note = "Normal Volatility"
+
+        return {
+            "adjusted_risk_pct": min(adjusted_risk, 3.0),
+            "volatility_ratio": volatility_ratio,
+            "current_atr_pct": current_atr_pct,
+            "avg_atr_pct": avg_atr_pct,
+            "risk_note": risk_note
+        }
 
     def get_monthly_signal(self):
-        """วิเคราะห์สัญญาณ Monthly แบบปรับปรุง"""
+        """วิเคราะห์สัญญาณ Monthly แบบปรับปรุง พร้อมข้อมูลย้อนหลัง"""
 
         monthly = self.data["monthly"].iloc[-1]
         weekly = self.data["weekly"].iloc[-1]
@@ -971,8 +1514,22 @@ class MonthlyTradingStrategy:
         monthly_prev = self.data["monthly"].iloc[-2]
         weekly_prev = self.data["weekly"].iloc[-2]
 
+        # วิเคราะห์ Market Regime และ Historical Performance
+        market_regime = self.detect_market_regime(self.data["weekly"])
+        historical_perf = self.analyze_historical_performance(self.data["weekly"])
+
         signals = {"long": 0, "short": 0, "neutral": 0}
         reasons = {"long": [], "short": [], "neutral": []}
+
+        # เพิ่มข้อมูล Market Context
+        regime_text = market_regime["regime"].replace("_", " ")
+        reasons["neutral"].append(f"📈 Market Regime: {regime_text} ({market_regime['confidence']:.0f}%)")
+
+        if historical_perf["total_signals"] > 0:
+            reasons["neutral"].append(
+                f"📊 Historical: Win Rate {historical_perf['win_rate']:.1f}%, "
+                f"Avg Return {historical_perf['avg_return']:.2f}%"
+            )
 
         # === MONTHLY TIMEFRAME ANALYSIS ===
         if monthly["EMA_12"] > monthly["EMA_26"]:
@@ -1044,13 +1601,25 @@ class MonthlyTradingStrategy:
             signals["short"] += 1
             reasons["short"].append("📊 Daily Aligned Bearish")
 
-        daily_divergence = self.check_divergence(self.data["daily"], "RSI")
-        if daily_divergence == "bullish":
-            signals["long"] += 2
-            reasons["long"].append("🔄 Daily Bullish Divergence")
-        elif daily_divergence == "bearish":
-            signals["short"] += 2
-            reasons["short"].append("🔄 Daily Bearish Divergence")
+        # Divergence Detection แบบปรับปรุง
+        daily_divergence, div_strength = self.check_divergence(self.data["daily"], "RSI")
+        if daily_divergence == "bullish" and div_strength > 0:
+            div_score = 2 if div_strength < 30 else 3 if div_strength < 60 else 4
+            signals["long"] += div_score
+            reasons["long"].append(f"🔄 Daily Bullish Divergence (Strength: {div_strength:.0f})")
+        elif daily_divergence == "bearish" and div_strength > 0:
+            div_score = 2 if div_strength < 30 else 3 if div_strength < 60 else 4
+            signals["short"] += div_score
+            reasons["short"].append(f"🔄 Daily Bearish Divergence (Strength: {div_strength:.0f})")
+
+        # Weekly Divergence
+        weekly_divergence, weekly_div_strength = self.check_divergence(self.data["weekly"], "RSI", lookback=20)
+        if weekly_divergence == "bullish" and weekly_div_strength > 20:
+            signals["long"] += 3
+            reasons["long"].append("🔄 Weekly Bullish Divergence")
+        elif weekly_divergence == "bearish" and weekly_div_strength > 20:
+            signals["short"] += 3
+            reasons["short"].append("🔄 Weekly Bearish Divergence")
 
         # === TREND STRENGTH ===
         if monthly["ADX"] > 25:
@@ -1075,9 +1644,10 @@ class MonthlyTradingStrategy:
         return signals, reasons
 
     def calculate_position_management(self, current_price, signal_type):
-        """คำนวณการจัดการ Position สำหรับ Monthly"""
+        """คำนวณการจัดการ Position สำหรับ Monthly แบบปรับปรุง"""
 
         monthly_df = self.data["monthly"]
+        weekly_df = self.data["weekly"]
         monthly = monthly_df.iloc[-1]
 
         atr_monthly = monthly["ATR"]
@@ -1085,26 +1655,50 @@ class MonthlyTradingStrategy:
         sr = self.calculate_support_resistance(monthly_df)
         fib_levels, fib_trend = self.calculate_fibonacci_levels(monthly_df)
 
+        # Market Regime และ Volatility Analysis
+        market_regime = self.detect_market_regime(weekly_df)
+        vol_risk = self.calculate_volatility_adjusted_risk(weekly_df)
+
+        # ปรับ Multipliers ตาม Market Regime
+        regime = market_regime["regime"]
+        if regime in ["STRONG_UPTREND", "STRONG_DOWNTREND"]:
+            sl_multiplier = 2.5
+            tp_multiplier = [4, 6, 10]
+        elif regime == "RANGING":
+            sl_multiplier = 1.5
+            tp_multiplier = [2, 3, 5]
+        else:
+            sl_multiplier = 2.0
+            tp_multiplier = [3, 5, 8]
+
         if signal_type == "LONG":
             stop_loss_support = sr["main_support"]
-            stop_loss_atr = current_price - (atr_monthly * 2)
+            stop_loss_atr = current_price - (atr_monthly * sl_multiplier)
             stop_loss = max(stop_loss_support, stop_loss_atr)
 
-            tp1 = current_price + (atr_monthly * 3)
-            tp2 = sr["main_resistance"]
-            tp3 = current_price + (atr_monthly * 6)
+            tp1 = current_price + (atr_monthly * tp_multiplier[0])
+            tp2 = current_price + (atr_monthly * tp_multiplier[1])
+            tp3 = current_price + (atr_monthly * tp_multiplier[2])
+
+            # ใช้ Resistance เป็น TP ถ้าใกล้กว่า
+            if sr["main_resistance"] < tp2 and sr["main_resistance"] > current_price:
+                tp2 = sr["main_resistance"]
 
             for level, price in fib_levels.items():
                 if price > current_price and "1.272" in level:
                     tp3 = max(tp3, price)
         else:
             stop_loss_resistance = sr["main_resistance"]
-            stop_loss_atr = current_price + (atr_monthly * 2)
+            stop_loss_atr = current_price + (atr_monthly * sl_multiplier)
             stop_loss = min(stop_loss_resistance, stop_loss_atr)
 
-            tp1 = current_price - (atr_monthly * 3)
-            tp2 = sr["main_support"]
-            tp3 = current_price - (atr_monthly * 6)
+            tp1 = current_price - (atr_monthly * tp_multiplier[0])
+            tp2 = current_price - (atr_monthly * tp_multiplier[1])
+            tp3 = current_price - (atr_monthly * tp_multiplier[2])
+
+            # ใช้ Support เป็น TP ถ้าใกล้กว่า
+            if sr["main_support"] > tp2 and sr["main_support"] < current_price:
+                tp2 = sr["main_support"]
 
             for level, price in fib_levels.items():
                 if price < current_price and "1.272" in level:
@@ -1121,6 +1715,8 @@ class MonthlyTradingStrategy:
             "support_resistance": sr,
             "fibonacci": fib_levels,
             "fib_trend": fib_trend,
+            "market_regime": market_regime,
+            "volatility_risk": vol_risk,
         }
 
     def get_confidence_level(self, signals):
@@ -1254,7 +1850,7 @@ class MonthlyTradingStrategy:
         print("=" * 100)
 
     def _print_trade_setup(self, position_mgmt, signal_type, balance, current_price):
-        """พิมพ์ Trade Setup"""
+        """พิมพ์ Trade Setup พร้อมข้อมูล Advanced Analysis"""
         entry = position_mgmt["entry"]
         sl = position_mgmt["stop_loss"]
         tp1 = position_mgmt["tp1"]
@@ -1272,7 +1868,28 @@ class MonthlyTradingStrategy:
             tp2_pct = ((entry - tp2) / entry) * 100
             tp3_pct = ((entry - tp3) / entry) * 100
 
-        print(f"\n📊 Volatility: {position_mgmt['atr_percent']:.2f}% (ATR: ${position_mgmt['atr']:,.2f})")
+        # Market Regime Info
+        if "market_regime" in position_mgmt:
+            regime = position_mgmt["market_regime"]
+            regime_text = regime["regime"].replace("_", " ")
+            print("\n🌍 MARKET CONTEXT:")
+            print(f"  • Regime: {regime_text} ({regime['confidence']:.0f}% confidence)")
+            print(f"  • ADX: {regime['adx']:.1f}")
+            print(f"  • Price Range: {regime['price_range_pct']:.1f}%")
+
+        # Volatility Info
+        if "volatility_risk" in position_mgmt:
+            vol = position_mgmt["volatility_risk"]
+            vol_status = "🔴" if vol["volatility_ratio"] > 1.3 else "🟢" if vol["volatility_ratio"] < 0.8 else "🟡"
+            print("\n📊 VOLATILITY ANALYSIS:")
+            print(f"  • Current ATR: {vol['current_atr_pct']:.2f}% | Avg: {vol['avg_atr_pct']:.2f}%")
+            print(f"  • Volatility Ratio: {vol_status} {vol['volatility_ratio']:.2f}x")
+            print(f"  • Risk Adjustment: {vol['risk_note']}")
+            adjusted_risk = vol["adjusted_risk_pct"]
+        else:
+            adjusted_risk = 2.0
+
+        print(f"\n📊 ATR: ${position_mgmt['atr']:,.2f} ({position_mgmt['atr_percent']:.2f}%)")
 
         print("\n💼 TRADE SETUP:")
         print(f"  🎯 Entry: ${entry:,.2f}")
@@ -1281,14 +1898,15 @@ class MonthlyTradingStrategy:
         print(f"  🎁 TP2 (33%): ${tp2:,.2f} ({tp2_pct:+.2f}% = {tp2_pct * self.leverage:+.1f}% margin)")
         print(f"  🎁 TP3 (34%): ${tp3:,.2f} ({tp3_pct:+.2f}% = {tp3_pct * self.leverage:+.1f}% margin)")
 
-        risk_pct = 2
+        # ใช้ Volatility-adjusted Risk
+        risk_pct = adjusted_risk
         risk_amount = balance * (risk_pct / 100)
         position_size = (risk_amount / (abs(sl_pct) / 100)) * self.leverage
         margin_required = position_size / self.leverage
 
         print(f"\n💰 POSITION MANAGEMENT (Balance: ${balance:,.2f}):")
         print(f"  📊 Leverage: {self.leverage}x")
-        print(f"  📊 Risk per Trade: {risk_pct}% (${risk_amount:,.2f})")
+        print(f"  📊 Risk per Trade: {risk_pct:.1f}% (${risk_amount:,.2f}) - Volatility Adjusted")
         print(f"  📊 Margin Required: ${margin_required:,.2f}")
         print(f"  📊 Position Size: ${position_size:,.2f}")
 
