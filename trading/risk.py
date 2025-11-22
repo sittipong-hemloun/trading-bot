@@ -12,15 +12,19 @@ def calculate_risk_score(df: pd.DataFrame, signal_type: str) -> dict:
     risk_score = 50  # Start at neutral
     risk_factors = []
 
-    # 1. Volatility Risk
+    # 1. Volatility Risk - use relative comparison to average
     atr_pct = latest["ATR_percent"] if pd.notna(latest.get("ATR_percent")) else 3
-    if atr_pct > 5:
+    avg_atr_pct = df["ATR_percent"].tail(20).mean() if "ATR_percent" in df.columns else 3
+    atr_ratio = atr_pct / avg_atr_pct if avg_atr_pct > 0 else 1
+
+    # Use relative thresholds instead of absolute
+    if atr_ratio > 1.5:  # 50% above average
         risk_score += 15
         risk_factors.append(f"High Volatility ({atr_pct:.1f}%)")
-    elif atr_pct > 3:
+    elif atr_ratio > 1.2:  # 20% above average
         risk_score += 5
         risk_factors.append(f"Moderate Volatility ({atr_pct:.1f}%)")
-    else:
+    elif atr_ratio < 0.7:  # 30% below average
         risk_score -= 5
         risk_factors.append(f"Low Volatility ({atr_pct:.1f}%)")
 

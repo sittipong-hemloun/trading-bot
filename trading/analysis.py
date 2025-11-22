@@ -159,7 +159,11 @@ def get_volume_confirmation(df: pd.DataFrame, lookback: int = 20) -> dict:
 def find_confluence_zones(df: pd.DataFrame, current_price: float) -> dict:
     """หา Confluence Zones - บริเวณที่มีหลาย levels รวมกัน"""
     zones = {"support": [], "resistance": []}
-    tolerance = current_price * 0.02  # 2% tolerance
+
+    # Use ATR-based tolerance instead of fixed 2%
+    latest = df.iloc[-1]
+    atr_pct = latest["ATR_percent"] if pd.notna(latest.get("ATR_percent")) else 3.0
+    tolerance = current_price * max(0.015, atr_pct * 0.005)  # 0.5x ATR%, min 1.5%
 
     # Collect all significant levels
     levels = []
@@ -328,7 +332,18 @@ def check_divergence(df: pd.DataFrame, indicator: str = "RSI", lookback: int = 1
 
 
 def detect_market_regime(df: pd.DataFrame) -> dict:
-    """ตรวจจับสภาวะตลาดปัจจุบัน"""
+    """
+    ตรวจจับสภาวะตลาดปัจจุบัน
+
+    ADX Thresholds (industry standard):
+    - > 40: Very strong trend
+    - 25-40: Strong trend
+    - 20-25: Weak trend
+    - < 20: No trend / ranging
+
+    BB Width Thresholds (relative to 20-period average):
+    - Uses historical average for adaptive thresholds
+    """
     if len(df) < 20:
         return {"regime": "UNKNOWN", "confidence": 0, "adx": 0, "bb_width": 0, "price_range_pct": 0}
 
@@ -338,8 +353,10 @@ def detect_market_regime(df: pd.DataFrame) -> dict:
     # ADX for trend strength
     adx = latest["ADX"] if pd.notna(latest.get("ADX")) else 20
 
-    # BB Width for volatility
+    # BB Width for volatility - use relative comparison
     bb_width = latest["BB_width"] if pd.notna(latest.get("BB_width")) else 5
+    avg_bb_width = recent["BB_width"].mean() if "BB_width" in df.columns else 5
+    bb_width_ratio = bb_width / avg_bb_width if avg_bb_width > 0 else 1
 
     # Price range over period
     price_high = recent["high"].max()
@@ -350,16 +367,24 @@ def detect_market_regime(df: pd.DataFrame) -> dict:
     di_plus = latest["DI_plus"] if pd.notna(latest.get("DI_plus")) else 20
     di_minus = latest["DI_minus"] if pd.notna(latest.get("DI_minus")) else 20
 
+    # ADX thresholds (industry standard values)
+    ADX_VERY_STRONG = 40  # Very strong trend
+    ADX_STRONG = 25       # Strong trend (below this = weak/no trend)
+
+    # BB width thresholds (relative to average)
+    BB_HIGH_VOL = 1.5     # 50% above average = high volatility
+    BB_LOW_VOL = 0.6      # 40% below average = low volatility / squeeze
+
     # Determine regime
-    if adx > 40:
+    if adx > ADX_VERY_STRONG:
         if di_plus > di_minus:
             regime = "STRONG_UPTREND"
             confidence = min(90, adx + 20)
         else:
             regime = "STRONG_DOWNTREND"
             confidence = min(90, adx + 20)
-    elif adx > 25:
-        if bb_width > 8:  # High volatility
+    elif adx > ADX_STRONG:
+        if bb_width_ratio > BB_HIGH_VOL:  # High volatility relative to average
             regime = "HIGH_VOLATILITY"
             confidence = min(80, adx + bb_width)
         elif di_plus > di_minus:
@@ -369,7 +394,7 @@ def detect_market_regime(df: pd.DataFrame) -> dict:
             regime = "WEAK_TREND"
             confidence = min(70, adx + 30)
     else:  # ADX < 25
-        if bb_width < 3:
+        if bb_width_ratio < BB_LOW_VOL:  # Low volatility = consolidation/squeeze
             regime = "CONSOLIDATION"
             confidence = min(80, 100 - adx)
         else:
@@ -388,16 +413,22 @@ def detect_market_regime(df: pd.DataFrame) -> dict:
 def analyze_historical_performance(df: pd.DataFrame, lookback: int = 50) -> dict:
     """
     วิเคราะห์ Performance ย้อนหลังของสัญญาณแบบ Multi-Indicator
+    ใช้ Dynamic Thresholds และ ATR-based SL/TP เหมือน strategy จริง
 
     Entry Conditions (Long):
-    - RSI < 35 AND RSI rising (confirmation)
-    - MACD histogram turning positive OR
-    - Price above EMA9
+    - RSI < dynamic_oversold AND RSI rising (confirmation)
+    - MACD histogram turning positive OR EMA bullish alignment
+
+    Entry Conditions (Short):
+    - RSI > dynamic_overbought AND RSI falling (confirmation)
+    - MACD histogram turning negative OR EMA bearish alignment
+    - ADX > 25 (strong trend confirmation)
 
     Exit Conditions:
-    - RSI > 65 OR
-    - MACD histogram turning negative OR
-    - Stop loss: -3% OR Take profit: +5%
+    - ATR-based Stop Loss (2x ATR)
+    - ATR-based Take Profit (3x ATR)
+    - RSI reversal signals
+    - MACD reversal
     """
     if len(df) < lookback:
         lookback = len(df) - 1
@@ -415,6 +446,9 @@ def analyze_historical_performance(df: pd.DataFrame, lookback: int = 50) -> dict
     trades = []
     position = None
 
+    # Calculate dynamic thresholds based on volatility
+    avg_atr_pct = recent_df["ATR_percent"].mean() if "ATR_percent" in recent_df.columns else 3.0
+
     for i in range(2, len(recent_df)):
         row = recent_df.iloc[i]
         prev_row = recent_df.iloc[i - 1]
@@ -422,6 +456,21 @@ def analyze_historical_performance(df: pd.DataFrame, lookback: int = 50) -> dict
         # Skip if essential indicators are missing
         if pd.isna(row.get("RSI")) or pd.isna(row.get("MACD_histogram")):
             continue
+
+        # === DYNAMIC THRESHOLDS based on current volatility ===
+        current_atr_pct = row["ATR_percent"] if pd.notna(row.get("ATR_percent")) else 3.0
+        volatility_ratio = current_atr_pct / avg_atr_pct if avg_atr_pct > 0 else 1.0
+
+        # Adjust RSI thresholds based on volatility (more relaxed for backtest)
+        if volatility_ratio > 1.5:  # High volatility - use more extreme thresholds
+            rsi_oversold = 30
+            rsi_overbought = 70
+        elif volatility_ratio < 0.7:  # Low volatility - use tighter thresholds
+            rsi_oversold = 40
+            rsi_overbought = 60
+        else:  # Normal volatility
+            rsi_oversold = 35
+            rsi_overbought = 65
 
         rsi = row["RSI"]
         rsi_prev = prev_row["RSI"]
@@ -440,11 +489,14 @@ def analyze_historical_performance(df: pd.DataFrame, lookback: int = 50) -> dict
         adx = row.get("ADX", 20)
         strong_trend = adx > 25
 
+        # ATR for dynamic SL/TP
+        atr = row.get("ATR", row["close"] * 0.03)  # fallback to 3% if ATR missing
+
         if position is None:
             # === LONG ENTRY ===
             # Condition: RSI oversold + rising + (MACD turning up OR EMA bullish)
             long_signal = (
-                rsi < 35 and
+                rsi < rsi_oversold and
                 rsi_rising and
                 (macd_turning_up or ema_bullish)
             )
@@ -452,26 +504,32 @@ def analyze_historical_performance(df: pd.DataFrame, lookback: int = 50) -> dict
             # === SHORT ENTRY ===
             # Condition: RSI overbought + falling + (MACD turning down OR EMA bearish)
             short_signal = (
-                rsi > 65 and
+                rsi > rsi_overbought and
                 rsi_falling and
                 (macd_turning_down or ema_bearish)
             )
+
+            # ATR-based SL/TP multipliers (adjusted for volatility)
+            sl_multiplier = 2.0 if volatility_ratio <= 1.2 else 2.5  # Wider SL in high vol
+            tp_multiplier = 3.0 if volatility_ratio <= 1.2 else 2.5  # Tighter TP in high vol
 
             if long_signal:
                 position = {
                     "entry": row["close"],
                     "type": "long",
                     "entry_idx": i,
-                    "stop_loss": row["close"] * 0.97,  # -3%
-                    "take_profit": row["close"] * 1.05  # +5%
+                    "stop_loss": row["close"] - (atr * sl_multiplier),
+                    "take_profit": row["close"] + (atr * tp_multiplier),
+                    "rsi_exit_threshold": rsi_overbought
                 }
             elif short_signal and strong_trend:
                 position = {
                     "entry": row["close"],
                     "type": "short",
                     "entry_idx": i,
-                    "stop_loss": row["close"] * 1.03,  # +3%
-                    "take_profit": row["close"] * 0.95  # -5%
+                    "stop_loss": row["close"] + (atr * sl_multiplier),
+                    "take_profit": row["close"] - (atr * tp_multiplier),
+                    "rsi_exit_threshold": rsi_oversold
                 }
 
         else:
@@ -484,9 +542,9 @@ def analyze_historical_performance(df: pd.DataFrame, lookback: int = 50) -> dict
                 pnl_pct = (current_price - entry_price) / entry_price * 100
 
                 exit_signal = (
-                    current_price <= position["stop_loss"] or  # Stop loss
-                    current_price >= position["take_profit"] or  # Take profit
-                    (rsi > 65 and rsi_falling) or  # RSI overbought + falling
+                    current_price <= position["stop_loss"] or  # ATR-based Stop loss
+                    current_price >= position["take_profit"] or  # ATR-based Take profit
+                    (rsi > position["rsi_exit_threshold"] and rsi_falling) or  # Dynamic RSI exit
                     (macd_turning_down and macd_hist < 0)  # MACD bearish
                 )
 
@@ -504,9 +562,9 @@ def analyze_historical_performance(df: pd.DataFrame, lookback: int = 50) -> dict
                 pnl_pct = (entry_price - current_price) / entry_price * 100
 
                 exit_signal = (
-                    current_price >= position["stop_loss"] or  # Stop loss
-                    current_price <= position["take_profit"] or  # Take profit
-                    (rsi < 35 and rsi_rising) or  # RSI oversold + rising
+                    current_price >= position["stop_loss"] or  # ATR-based Stop loss
+                    current_price <= position["take_profit"] or  # ATR-based Take profit
+                    (rsi < position["rsi_exit_threshold"] and rsi_rising) or  # Dynamic RSI exit
                     (macd_turning_up and macd_hist > 0)  # MACD bullish
                 )
 

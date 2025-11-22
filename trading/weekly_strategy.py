@@ -366,10 +366,13 @@ class WeeklyTradingStrategy(BaseStrategy):
         # === VWAP Position ===
         if pd.notna(daily.get("VWAP")):
             vwap = daily["VWAP"]
-            if current_price > vwap * 1.02:  # 2% above VWAP
+            # Use ATR-based threshold instead of fixed 2%
+            atr_pct = daily["ATR_percent"] if pd.notna(daily.get("ATR_percent")) else 3.0
+            vwap_threshold = max(1.0, atr_pct * 0.5) / 100  # 0.5x ATR, minimum 1%
+            if current_price > vwap * (1 + vwap_threshold):
                 signals["long"] += WEIGHTS["vwap_position"]
                 reasons["long"].append(f"📈 Price Above VWAP: ${vwap:,.0f}")
-            elif current_price < vwap * 0.98:  # 2% below VWAP
+            elif current_price < vwap * (1 - vwap_threshold):
                 signals["short"] += WEIGHTS["vwap_position"]
                 reasons["short"].append(f"📉 Price Below VWAP: ${vwap:,.0f}")
 
@@ -395,17 +398,21 @@ class WeeklyTradingStrategy(BaseStrategy):
                 reasons["short"].append(f"🕯️ Bearish Pattern: {patterns_str}")
 
         # === CONFLUENCE ZONES ===
+        # Use ATR-based threshold for confluence distance (more adaptive to volatility)
+        atr_pct_for_conf = daily["ATR_percent"] if pd.notna(daily.get("ATR_percent")) else 3.0
+        confluence_threshold = max(1.5, atr_pct_for_conf * 0.6)  # 0.6x ATR, minimum 1.5%
+
         if confluence_zones["support"]:
             nearest_support = confluence_zones["support"][0]
             support_distance_pct = (current_price - nearest_support["price"]) / current_price * 100
-            if support_distance_pct < 2:
+            if support_distance_pct < confluence_threshold:
                 signals["long"] += WEIGHTS["confluence_zone"]
                 reasons["long"].append(f"🎯 Near Confluence Support (Strength: {nearest_support['strength']})")
 
         if confluence_zones["resistance"]:
             nearest_resistance = confluence_zones["resistance"][0]
             resist_distance_pct = (nearest_resistance["price"] - current_price) / current_price * 100
-            if resist_distance_pct < 2:
+            if resist_distance_pct < confluence_threshold:
                 signals["short"] += WEIGHTS["confluence_zone"]
                 reasons["short"].append(f"🎯 Near Confluence Resistance (Strength: {nearest_resistance['strength']})")
 
