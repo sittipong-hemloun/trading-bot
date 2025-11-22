@@ -9,7 +9,7 @@ import os
 import io
 
 from dotenv import load_dotenv
-from strategies import WeeklyTradingStrategy, MonthlyTradingStrategy
+from trading import WeeklyTradingStrategy, MonthlyTradingStrategy
 from email_notifier import EmailNotifier
 
 

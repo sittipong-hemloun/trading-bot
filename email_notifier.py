@@ -262,6 +262,7 @@ class EmailNotifier:
         .info-item {{
             background: #1e2a4a;
             padding: 8px;
+            margin-bottom: 4px;
             border-radius: 6px;
             text-align: center;
         }}
