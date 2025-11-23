@@ -181,6 +181,11 @@ class EmailNotifier:
             border-left: 3px solid #e94560;
             color: #e94560;
         }}
+        .signal-list .neutral {{
+            background: rgba(255, 215, 0, 0.15);
+            border-left: 3px solid #ffd700;
+            color: #ffd700;
+        }}
         .trade-setup {{
             background: #1e2a4a;
             border-radius: 8px;
@@ -236,6 +241,27 @@ class EmailNotifier:
             font-size: 12px;
         }}
         .level-list li:last-child {{ border-bottom: none; }}
+        .risk-badge {{
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }}
+        .risk-low {{ background: #0d4a3a; color: #34e89e; }}
+        .risk-medium {{ background: #4a4a1a; color: #ffd700; }}
+        .risk-high {{ background: #4a1a1a; color: #e94560; }}
+        .context-grid {{
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+        }}
+        .context-item {{
+            background: #1e2a4a;
+            padding: 8px;
+            border-radius: 6px;
+            text-align: center;
+        }}
         .footer {{
             background: #151d30;
             padding: 4px;
@@ -270,7 +296,7 @@ class EmailNotifier:
         .info-label {{ font-size: 10px; color: #8892b0; }}
         .info-value {{ font-size: 13px; font-weight: 600; }}
         @media (max-width: 600px) {{
-            .indicator-grid, .info-grid {{ grid-template-columns: 1fr; }}
+            .indicator-grid, .info-grid, .context-grid {{ grid-template-columns: 1fr; }}
             .price-value {{ font-size: 24px; }}
         }}
     </style>
@@ -287,7 +313,7 @@ class EmailNotifier:
         </div>
         <div class="footer">
             <p class="warning">⚠️ This is automated analysis. Always DYOR.</p>
-            <p>Crypto Trading Bot v2.0</p>
+            <p>Crypto Trading Bot v2.1</p>
         </div>
     </div>
 </body>
@@ -318,7 +344,7 @@ class EmailNotifier:
         leverage_match = re.search(r"Leverage: (\d+)x", text)
         leverage = leverage_match.group(1) if leverage_match else "5"
 
-        # Signal percentages
+        # Signal percentages - Updated regex
         long_match = re.search(r"LONG Signals: (\d+) \(([0-9.]+)%\)", text)
         short_match = re.search(r"SHORT Signals: (\d+) \(([0-9.]+)%\)", text)
         neutral_match = re.search(r"NEUTRAL Signals: (\d+) \(([0-9.]+)%\)", text)
@@ -328,9 +354,11 @@ class EmailNotifier:
         short_count = int(short_match.group(1)) if short_match else 0
         short_pct = float(short_match.group(2)) if short_match else 0
         neutral_count = int(neutral_match.group(1)) if neutral_match else 0
+        neutral_pct = float(neutral_match.group(2)) if neutral_match else 0
 
-        # Recommendation
+        # Recommendation - Updated regex
         recommendation = "WAIT"
+        confidence = 0
         confidence_match = re.search(r"(?:STRONG |MODERATE )?(LONG|SHORT) SIGNAL \(([0-9.]+)%\)", text)
         if confidence_match:
             recommendation = confidence_match.group(1)
@@ -338,14 +366,14 @@ class EmailNotifier:
         else:
             confidence = max(long_pct, short_pct)
 
-        # Trade Setup
+        # Trade Setup - Updated regex for new format
         entry_match = re.search(r"Entry: \$([0-9,]+\.[0-9]+)", text)
         sl_match = re.search(r"Stop Loss: \$([0-9,]+\.[0-9]+) \(([^)]+)\)", text)
-        tp1_match = re.search(r"TP1.*?: \$([0-9,]+\.[0-9]+) \(([^)]+)\)", text)
-        tp2_match = re.search(r"TP2.*?: \$([0-9,]+\.[0-9]+) \(([^)]+)\)", text)
-        tp3_match = re.search(r"TP3.*?: \$([0-9,]+\.[0-9]+) \(([^)]+)\)", text)
+        tp1_match = re.search(r"TP1 \(40%\): \$([0-9,]+\.[0-9]+) \(([^)]+)\)", text)
+        tp2_match = re.search(r"TP2 \(30%\): \$([0-9,]+\.[0-9]+) \(([^)]+)\)", text)
+        tp3_match = re.search(r"TP3 \(30%\): \$([0-9,]+\.[0-9]+) \(([^)]+)\)", text)
 
-        # Position Management
+        # Position Management - Updated regex
         risk_match = re.search(r"Risk per Trade: ([0-9.]+)% \(\$([0-9,]+\.[0-9]+)\)", text)
         margin_match = re.search(r"Margin Required: \$([0-9,]+\.[0-9]+)", text)
         position_match = re.search(r"Position Size: \$([0-9,]+\.[0-9]+)", text)
@@ -355,33 +383,61 @@ class EmailNotifier:
         rr2_match = re.search(r"TP2: 1:([0-9.]+)", text)
         rr3_match = re.search(r"TP3: 1:([0-9.]+)", text)
 
+        # ATR
+        atr_match = re.search(r"ATR: \$([0-9,]+\.[0-9]+) \(([0-9.]+)%\)", text)
+
         # Support/Resistance
         support_matches = re.findall(r"S(\d): \$([0-9,]+\.[0-9]+)", text)
         resistance_matches = re.findall(r"R(\d): \$([0-9,]+\.[0-9]+)", text)
 
-        # Indicators
+        # Market Context (New)
+        regime_match = re.search(r"Regime: ([A-Z_]+) \(([0-9]+)% confidence\)", text)
+        adx_bb_match = re.search(r"ADX: ([0-9.]+) \| BB Width: ([0-9.]+)%", text)
+        price_range_match = re.search(r"Price Range \(20d\): ([0-9.]+)%", text)
+
+        # Multi-Indicator Confirmation (New)
+        multi_ind_match = re.search(r"Direction: (bullish|bearish|neutral) \((\d+)/6 indicators\)", text)
+        confirm_match = re.search(r"Confirmation: ([0-9]+)% \| Strength: ([0-9]+)%", text)
+
+        # Risk Assessment (New)
+        risk_score_match = re.search(r"Risk Score: [🟢🟡🔴] (\d+)/100 \(([A-Z]+)\)", text)
+
+        # Volatility Analysis (New)
+        vol_current_match = re.search(r"Current ATR: ([0-9.]+)% \| Avg: ([0-9.]+)%", text)
+        vol_ratio_match = re.search(r"Volatility Ratio: [🔥📉⚖️] ([0-9.]+)x", text)
+        risk_adj_match = re.search(r"Risk Adjustment: (.+?)(?:\n|$)", text)
+
+        # Candlestick Patterns (New)
+        candle_bullish = re.search(r"Bullish: ([^\n]+)", text)
+        candle_bearish = re.search(r"Bearish: ([^\n]+)", text)
+        candle_score_match = re.search(r"Net Score: ([+-]?\d+)", text)
+
+        # Trend Scores
+        weekly_trend_match = re.search(r"Weekly Trend Score: [🟢🔴🟡] ([+-]?\d+)", text)
+        daily_trend_match = re.search(r"Daily Trend Score: [🟢🔴🟡] ([+-]?\d+)", text)
+
+        # Indicators - Updated patterns
         indicators = []
 
         # Weekly/Daily indicators
-        rsi_match = re.search(r"RSI: ([0-9.]+)", text)
-        if rsi_match:
-            rsi = float(rsi_match.group(1))
+        rsi_matches = re.findall(r"RSI: ([0-9.]+)", text)
+        if rsi_matches:
+            rsi = float(rsi_matches[-1])  # Use daily RSI
             rsi_color = "green" if rsi < 30 else "red" if rsi > 70 else "yellow"
             indicators.append(("RSI", f"{rsi:.1f}", rsi_color))
 
-        macd_match = re.search(r"MACD: ([0-9.-]+)", text)
-        if macd_match:
-            macd = float(macd_match.group(1))
+        macd_matches = re.findall(r"MACD: ([0-9.-]+)", text)
+        if macd_matches:
+            macd = float(macd_matches[-1])
             macd_color = "green" if macd > 0 else "red"
             indicators.append(("MACD", f"{macd:.0f}", macd_color))
 
-        adx_match = re.search(r"ADX: ([0-9.]+)", text)
+        adx_match = re.search(r"ADX: ([0-9.]+) \(DI\+: ([0-9.]+), DI-: ([0-9.]+)\)", text)
         if adx_match:
             adx = float(adx_match.group(1))
             adx_color = "green" if adx > 25 else "yellow"
             indicators.append(("ADX", f"{adx:.1f}", adx_color))
 
-        atr_match = re.search(r"ATR: \$([0-9,]+\.[0-9]+) \(([0-9.]+)%\)", text)
         if atr_match:
             indicators.append(("ATR", f"{atr_match.group(2)}%", "blue"))
 
@@ -396,10 +452,6 @@ class EmailNotifier:
             cci = float(cci_match.group(1))
             cci_color = "green" if cci < -100 else "red" if cci > 100 else "yellow"
             indicators.append(("CCI", f"{cci:.0f}", cci_color))
-
-        # Trend Scores
-        weekly_trend_match = re.search(r"Weekly Trend Score: [🟢🔴🟡] ([+-]?\d+)", text)
-        daily_trend_match = re.search(r"Daily Trend Score: [🟢🔴🟡] ([+-]?\d+)", text)
 
         # Supertrend
         supertrend_match = re.search(r"Supertrend: (Bullish|Bearish)", text)
@@ -421,9 +473,6 @@ class EmailNotifier:
         signal_icon = "✅" if recommendation == "LONG" else "❌" if recommendation == "SHORT" else "⏸️"
         signal_text = f"{recommendation} SIGNAL" if recommendation != "WAIT" else "WAIT - No Clear Signal"
 
-        # Calculate neutral percentage
-        neutral_pct = 100 - long_pct - short_pct if (long_pct + short_pct) <= 100 else 0
-
         html_parts.append(f"""
         <div class="signal-box {signal_class}">
             <div class="signal-title">{signal_icon} {signal_text}</div>
@@ -440,6 +489,125 @@ class EmailNotifier:
             </div>
         </div>
         """)
+
+        # Market Context (New Section)
+        if regime_match:
+            regime = regime_match.group(1)
+            regime_conf = regime_match.group(2)
+            adx_val = adx_bb_match.group(1) if adx_bb_match else "-"
+            bb_width = adx_bb_match.group(2) if adx_bb_match else "-"
+            price_range = price_range_match.group(1) if price_range_match else "-"
+
+            # Color based on regime
+            regime_color = "green" if "UPTREND" in regime else "red" if "DOWNTREND" in regime else "yellow"
+
+            html_parts.append(f"""
+            <div class="section">
+                <div class="section-title">🌍 Market Context</div>
+                <div class="context-grid">
+                    <div class="context-item">
+                        <div class="info-label">Regime</div>
+                        <div class="info-value text-{regime_color}">{regime.replace('_', ' ')}</div>
+                        <div style="font-size: 10px; color: #8892b0;">{regime_conf}% confidence</div>
+                    </div>
+                    <div class="context-item">
+                        <div class="info-label">ADX / BB Width</div>
+                        <div class="info-value">{adx_val} / {bb_width}%</div>
+                    </div>
+                    <div class="context-item">
+                        <div class="info-label">Price Range (20d)</div>
+                        <div class="info-value">{price_range}%</div>
+                    </div>
+                </div>
+            </div>
+            """)
+
+        # Multi-Indicator Confirmation (New Section)
+        if multi_ind_match:
+            direction = multi_ind_match.group(1).upper()
+            ind_count = multi_ind_match.group(2)
+            confirm_pct = confirm_match.group(1) if confirm_match else "0"
+            strength = confirm_match.group(2) if confirm_match else "0"
+            dir_color = "green" if direction == "BULLISH" else "red" if direction == "BEARISH" else "yellow"
+
+            html_parts.append(f"""
+            <div class="section">
+                <div class="section-title">🎯 Multi-Indicator Confirmation</div>
+                <div class="info-grid">
+                    <div class="info-item">
+                        <div class="info-label">Direction</div>
+                        <div class="info-value text-{dir_color}">{direction} ({ind_count}/6)</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Confirmation</div>
+                        <div class="info-value">{confirm_pct}%</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Strength</div>
+                        <div class="info-value">{strength}%</div>
+                    </div>
+                </div>
+            </div>
+            """)
+
+        # Risk Assessment (New Section)
+        if risk_score_match:
+            risk_score = risk_score_match.group(1)
+            risk_level = risk_score_match.group(2)
+            risk_class = "risk-low" if risk_level == "LOW" else "risk-high" if risk_level == "HIGH" else "risk-medium"
+
+            # Extract risk factors
+            risk_factors = re.findall(r"    - ([^\n]+)", text)
+
+            html_parts.append(f"""
+            <div class="section">
+                <div class="section-title">⚠️ Risk Assessment</div>
+                <div style="text-align: center; margin-bottom: 12px;">
+                    <span class="risk-badge {risk_class}">{risk_level} RISK</span>
+                    <div style="font-size: 24px; font-weight: 700; margin-top: 8px;">{risk_score}/100</div>
+                </div>
+            """)
+
+            if risk_factors:
+                html_parts.append('<ul class="signal-list">')
+                for factor in risk_factors[:5]:
+                    html_parts.append(f'<li class="neutral">{factor}</li>')
+                html_parts.append('</ul>')
+
+            html_parts.append('</div>')
+
+        # Volatility Analysis (New Section)
+        if vol_current_match:
+            current_atr = vol_current_match.group(1)
+            avg_atr = vol_current_match.group(2)
+            vol_ratio = vol_ratio_match.group(1) if vol_ratio_match else "1.0"
+            risk_note = risk_adj_match.group(1) if risk_adj_match else ""
+
+            vol_color = "red" if float(vol_ratio) > 1.5 else "green" if float(vol_ratio) < 0.8 else "yellow"
+
+            html_parts.append(f"""
+            <div class="section">
+                <div class="section-title">📊 Volatility Analysis</div>
+                <div class="info-grid">
+                    <div class="info-item">
+                        <div class="info-label">Current ATR</div>
+                        <div class="info-value">{current_atr}%</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Average ATR</div>
+                        <div class="info-value">{avg_atr}%</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Volatility Ratio</div>
+                        <div class="info-value text-{vol_color}">{vol_ratio}x</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Risk Adjustment</div>
+                        <div class="info-value" style="font-size: 11px;">{risk_note[:30]}</div>
+                    </div>
+                </div>
+            </div>
+            """)
 
         # Trade Setup
         if entry_match:
@@ -562,6 +730,36 @@ class EmailNotifier:
             html_parts.append('</div>')
             html_parts.append('</div>')
 
+        # Candlestick Patterns (New Section)
+        if candle_bullish or candle_bearish:
+            html_parts.append('<div class="section">')
+            html_parts.append('<div class="section-title">🕯️ Candlestick Patterns</div>')
+
+            candle_net = int(candle_score_match.group(1)) if candle_score_match else 0
+            score_color = "green" if candle_net > 0 else "red" if candle_net < 0 else "yellow"
+
+            html_parts.append(f'<div style="text-align: center; margin-bottom: 12px;">Net Score: <span class="text-{score_color}" style="font-size: 18px; font-weight: 700;">{candle_net:+d}</span></div>')
+
+            html_parts.append('<div class="info-grid">')
+            if candle_bullish:
+                patterns = candle_bullish.group(1).strip()
+                html_parts.append(f"""
+                <div class="info-item">
+                    <div class="info-label">🟢 Bullish</div>
+                    <div class="info-value text-green" style="font-size: 11px;">{patterns}</div>
+                </div>
+                """)
+            if candle_bearish:
+                patterns = candle_bearish.group(1).strip()
+                html_parts.append(f"""
+                <div class="info-item">
+                    <div class="info-label">🔴 Bearish</div>
+                    <div class="info-value text-red" style="font-size: 11px;">{patterns}</div>
+                </div>
+                """)
+            html_parts.append('</div>')
+            html_parts.append('</div>')
+
         # Support & Resistance
         if support_matches or resistance_matches:
             html_parts.append('<div class="section">')
@@ -591,9 +789,9 @@ class EmailNotifier:
             html_parts.append('</div>')
 
         # Signal Details
-        long_signals = re.findall(r"  ((?:📈|📊|💪|💰|✅|🔥|🚀|🔄|☁️)[^\n]+)", text.split("SHORT Signals")[0]) if "SHORT Signals" in text else []
+        long_signals = re.findall(r"  ((?:📈|📊|💪|💰|✅|🔥|🚀|🔄|☁️|🎯|⬆️)[^\n]+)", text.split("SHORT Signals")[0]) if "SHORT Signals" in text else []
         short_section = text.split("SHORT Signals")[-1].split("NEUTRAL Signals")[0] if "SHORT Signals" in text else ""
-        short_signals = re.findall(r"  ((?:📉|📊|💪|⚠️|❌|🔥|🔻|🔄|☁️)[^\n]+)", short_section)
+        short_signals = re.findall(r"  ((?:📉|📊|💪|⚠️|❌|🔥|🔻|🔄|☁️|🎯|⬇️)[^\n]+)", short_section)
 
         if long_signals or short_signals:
             html_parts.append('<div class="section">')
