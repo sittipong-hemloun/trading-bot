@@ -24,12 +24,13 @@ def print_banner():
 
 def print_usage():
     """แสดงวิธีใช้งาน"""
-    print("Usage: python main.py [swing|monthly|both] [--no-email] [--no-ai]")
-    print("  swing   (s)  - Show swing trading analysis only (2-10 days)")
-    print("  monthly (m)  - Show monthly analysis only")
-    print("  both         - Show both analyses (default)")
-    print("  --no-email   - Skip sending email notification")
-    print("  --no-ai      - Skip DeepSeek AI analysis email")
+    print("Usage: python main.py [swing|monthly|both|deepseek] [--no-email] [--no-ai]")
+    print("  swing   (s)   - Show swing trading analysis only (2-10 days)")
+    print("  monthly (m)   - Show monthly analysis only")
+    print("  both          - Show both analyses (default)")
+    print("  deepseek (ai) - Run DeepSeek AI analysis only")
+    print("  --no-email    - Skip sending email notification")
+    print("  --no-ai       - Skip DeepSeek AI analysis email")
     print("")
     print("Email Configuration (Environment Variables):")
     print("  BOT_EMAIL_SENDER    - Gmail address for sending")
@@ -167,7 +168,7 @@ def main():
     # Determine mode
     mode = "both"
     for arg in args:
-        if arg.lower() in ["swing", "s", "monthly", "m", "both", "all"]:
+        if arg.lower() in ["swing", "s", "monthly", "m", "both", "all", "deepseek", "ai"]:
             mode = arg.lower()
             break
 
@@ -186,7 +187,7 @@ def main():
     print_banner()
 
     # Validate mode
-    if mode not in ["swing", "s", "monthly", "m", "both", "all"]:
+    if mode not in ["swing", "s", "monthly", "m", "both", "all", "deepseek", "ai"]:
         print_usage()
         return
 
@@ -206,6 +207,17 @@ def main():
 
     if mode in ["monthly", "m", "both", "all"]:
         monthly_output, monthly_trader = run_monthly_analysis(symbol, balance)
+
+    # If mode is deepseek/ai only, skip strategy analysis
+    if mode in ["deepseek", "ai"]:
+        print("\n🤖 Running DeepSeek AI Analysis Only...")
+        if email_configured and send_email:
+            run_deepseek_analysis(
+                email_sender, email_password, email_recipient, symbol
+            )
+        else:
+            print_email_not_configured()
+        return
 
     # Send separate emails
     if send_email:

@@ -861,10 +861,6 @@ class EmailNotifier:
         swing_data = market_summary.get("swing", {})
         monthly_data = market_summary.get("monthly", {})
 
-        # Get signal summaries
-        swing_signals = swing_data.get("signals", {})
-        monthly_signals = monthly_data.get("signals", {})
-
         html = f"""
 <!DOCTYPE html>
 <html>
@@ -1049,25 +1045,19 @@ class EmailNotifier:
 
         <div class="signals-grid">
             <div class="signal-card">
-                <h3>🔄 Swing Trading (2-10 days)</h3>
-                <div class="signal-bar">
-                    <div class="bar-long" style="width: {swing_signals.get('long_pct', 0)}%"></div>
-                    <div class="bar-short" style="width: {swing_signals.get('short_pct', 0)}%"></div>
-                </div>
-                <div class="signal-labels">
-                    <span class="text-green">Long {swing_signals.get('long_pct', 0):.0f}%</span>
-                    <span class="text-red">Short {swing_signals.get('short_pct', 0):.0f}%</span>
+                <h3>⏱️ 4H Timeframe</h3>
+                <div style="font-size: 12px; color: #8892b0; margin: 8px 0;">
+                    <div>RSI: <span class="text-yellow">{swing_data.get('RSI', 'N/A')}</span></div>
+                    <div>Trend: <span class="text-blue">{swing_data.get('trend', 'N/A')}</span></div>
+                    <div>ATR: <span class="text-yellow">{swing_data.get('ATR_percent', 'N/A')}%</span></div>
                 </div>
             </div>
             <div class="signal-card">
-                <h3>🌙 Monthly Trading</h3>
-                <div class="signal-bar">
-                    <div class="bar-long" style="width: {monthly_signals.get('long_pct', 0)}%"></div>
-                    <div class="bar-short" style="width: {monthly_signals.get('short_pct', 0)}%"></div>
-                </div>
-                <div class="signal-labels">
-                    <span class="text-green">Long {monthly_signals.get('long_pct', 0):.0f}%</span>
-                    <span class="text-red">Short {monthly_signals.get('short_pct', 0):.0f}%</span>
+                <h3>📅 1W Timeframe</h3>
+                <div style="font-size: 12px; color: #8892b0; margin: 8px 0;">
+                    <div>RSI: <span class="text-yellow">{monthly_data.get('RSI', 'N/A')}</span></div>
+                    <div>Trend: <span class="text-blue">{monthly_data.get('trend', 'N/A')}</span></div>
+                    <div>ATR: <span class="text-yellow">{monthly_data.get('ATR_percent', 'N/A')}%</span></div>
                 </div>
             </div>
         </div>

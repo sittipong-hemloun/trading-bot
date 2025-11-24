@@ -186,6 +186,15 @@ class DeepSeekAnalyzer:
             else:
                 indicators["trend"] = "SIDEWAYS"
 
+        # Volume Profile (simplified - high volume price levels)
+        if len(df) >= 20:
+            recent_df = df.tail(50)
+            price_bins = pd.cut(recent_df["close"], bins=10)
+            volume_by_price = recent_df.groupby(price_bins, observed=False)["volume"].sum().sort_values(ascending=False)
+            if len(volume_by_price) > 0:
+                poc_interval = volume_by_price.index[0]
+                indicators["POC"] = round((poc_interval.left + poc_interval.right) / 2, 2)  # Point of Control
+
         return indicators
 
     def prepare_standalone_market_data(self, symbol: str = "BTCUSDT") -> dict:
