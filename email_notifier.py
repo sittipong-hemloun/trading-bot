@@ -5,6 +5,7 @@ Email Notifier Module
 
 import re
 import smtplib
+import markdown
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
@@ -842,4 +843,294 @@ class EmailNotifier:
         except Exception as e:
             print(f"\n❌ Failed to send email: {e}")
             print("💡 Make sure you have set up App Password for Gmail")
+            return False
+
+    def create_deepseek_html_email(self, analysis_result: dict, market_summary: dict):
+        """สร้าง HTML email สำหรับ DeepSeek AI Analysis"""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # Convert markdown to HTML
+        analysis_text = analysis_result.get("analysis", "No analysis available")
+        analysis_html = markdown.markdown(
+            analysis_text,
+            extensions=["tables", "fenced_code", "nl2br"]
+        )
+
+        # Extract key metrics from market summary
+        current_price = market_summary.get("current_price", 0)
+        swing_data = market_summary.get("swing", {})
+        monthly_data = market_summary.get("monthly", {})
+
+        # Get signal summaries
+        swing_signals = swing_data.get("signals", {})
+        monthly_signals = monthly_data.get("signals", {})
+
+        html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * {{ box-sizing: border-box; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
+            color: #e8e8e8;
+            padding: 2px;
+            margin: 0;
+            line-height: 1.6;
+        }}
+        .container {{
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: #1a1a2e;
+            border-radius: 4px;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+        }}
+        .header {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            text-align: center;
+        }}
+        .header h1 {{
+            color: #fff;
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+        }}
+        .header .subtitle {{
+            color: rgba(255,255,255,0.9);
+            font-size: 14px;
+            margin-top: 8px;
+        }}
+        .header .ai-badge {{
+            display: inline-block;
+            background: rgba(255,255,255,0.2);
+            padding: 6px 20px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 600;
+            margin-top: 12px;
+        }}
+        .price-banner {{
+            background: linear-gradient(135deg, #1e2a4a 0%, #2d3a5a 100%);
+            padding: 15px;
+            text-align: center;
+            border-bottom: 1px solid #3a4a6b;
+        }}
+        .price-value {{
+            font-size: 36px;
+            font-weight: 700;
+            color: #ffd700;
+        }}
+        .price-label {{
+            font-size: 12px;
+            color: #8892b0;
+            text-transform: uppercase;
+        }}
+        .signals-grid {{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            padding: 15px;
+            background: #1e2a4a;
+        }}
+        .signal-card {{
+            background: #253557;
+            border-radius: 8px;
+            padding: 12px;
+            text-align: center;
+        }}
+        .signal-card h3 {{
+            margin: 0 0 8px 0;
+            font-size: 13px;
+            color: #8892b0;
+        }}
+        .signal-bar {{
+            height: 8px;
+            background: #1a1a2e;
+            border-radius: 4px;
+            overflow: hidden;
+            display: flex;
+            margin: 8px 0;
+        }}
+        .bar-long {{ background: #34e89e; height: 100%; }}
+        .bar-short {{ background: #e94560; height: 100%; }}
+        .signal-labels {{
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+        }}
+        .main-content {{
+            padding: 20px;
+        }}
+        .ai-analysis {{
+            background: #253557;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }}
+        .ai-analysis h2 {{
+            color: #667eea;
+            font-size: 18px;
+            margin: 0 0 15px 0;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #3a4a6b;
+        }}
+        .ai-analysis h3 {{
+            color: #4dabf7;
+            font-size: 14px;
+            margin: 20px 0 10px 0;
+        }}
+        .ai-analysis p {{
+            margin: 8px 0;
+            font-size: 13px;
+            color: #c8d0e8;
+        }}
+        .ai-analysis ul, .ai-analysis ol {{
+            margin: 8px 0;
+            padding-left: 20px;
+        }}
+        .ai-analysis li {{
+            margin: 5px 0;
+            font-size: 13px;
+            color: #c8d0e8;
+        }}
+        .ai-analysis strong {{
+            color: #ffd700;
+        }}
+        .ai-analysis code {{
+            background: #1a1a2e;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #4dabf7;
+        }}
+        .footer {{
+            background: #0f0c29;
+            padding: 15px;
+            text-align: center;
+        }}
+        .footer p {{
+            margin: 4px 0;
+            font-size: 11px;
+            color: #5a6a8a;
+        }}
+        .footer .powered {{
+            color: #667eea;
+            font-weight: 600;
+        }}
+        .footer .warning {{
+            color: #ffd700;
+        }}
+        .text-green {{ color: #34e89e; }}
+        .text-red {{ color: #e94560; }}
+        .text-yellow {{ color: #ffd700; }}
+        @media (max-width: 600px) {{
+            .signals-grid {{ grid-template-columns: 1fr; }}
+            .price-value {{ font-size: 28px; }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 DeepSeek AI Analysis</h1>
+            <div class="subtitle">{now}</div>
+            <div class="ai-badge">🧠 Powered by DeepSeek AI</div>
+        </div>
+
+        <div class="price-banner">
+            <div class="price-label">BTCUSDT Current Price</div>
+            <div class="price-value">${current_price:,.2f}</div>
+        </div>
+
+        <div class="signals-grid">
+            <div class="signal-card">
+                <h3>🔄 Swing Trading (2-10 days)</h3>
+                <div class="signal-bar">
+                    <div class="bar-long" style="width: {swing_signals.get('long_pct', 0)}%"></div>
+                    <div class="bar-short" style="width: {swing_signals.get('short_pct', 0)}%"></div>
+                </div>
+                <div class="signal-labels">
+                    <span class="text-green">Long {swing_signals.get('long_pct', 0):.0f}%</span>
+                    <span class="text-red">Short {swing_signals.get('short_pct', 0):.0f}%</span>
+                </div>
+            </div>
+            <div class="signal-card">
+                <h3>🌙 Monthly Trading</h3>
+                <div class="signal-bar">
+                    <div class="bar-long" style="width: {monthly_signals.get('long_pct', 0)}%"></div>
+                    <div class="bar-short" style="width: {monthly_signals.get('short_pct', 0)}%"></div>
+                </div>
+                <div class="signal-labels">
+                    <span class="text-green">Long {monthly_signals.get('long_pct', 0):.0f}%</span>
+                    <span class="text-red">Short {monthly_signals.get('short_pct', 0):.0f}%</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="main-content">
+            <div class="ai-analysis">
+                <h2>🧠 AI Analysis Report</h2>
+                {analysis_html}
+            </div>
+        </div>
+
+        <div class="footer">
+            <p class="warning">⚠️ This is AI-generated analysis. Always DYOR.</p>
+            <p class="powered">Powered by DeepSeek AI | Model: {analysis_result.get('model', 'deepseek-chat')}</p>
+            <p>Crypto Trading Bot v2.1</p>
+        </div>
+    </div>
+</body>
+</html>
+"""
+        return html
+
+    def send_deepseek_email(self, analysis_result: dict, market_summary: dict):
+        """ส่งอีเมล DeepSeek AI Analysis"""
+        try:
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = f"🤖 DeepSeek AI Analysis - BTC ${market_summary.get('current_price', 0):,.0f} - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            msg["From"] = self.sender_email
+            msg["To"] = self.recipient_email
+
+            # Text version (plain markdown)
+            text_content = f"""
+DeepSeek AI Analysis Report
+Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+Current BTC Price: ${market_summary.get('current_price', 0):,.2f}
+
+{analysis_result.get('analysis', 'No analysis available')}
+
+---
+Powered by DeepSeek AI
+⚠️ This is AI-generated analysis. Always DYOR.
+"""
+            text_part = MIMEText(text_content, "plain", "utf-8")
+            msg.attach(text_part)
+
+            # HTML version
+            html_content = self.create_deepseek_html_email(analysis_result, market_summary)
+            html_part = MIMEText(html_content, "html", "utf-8")
+            msg.attach(html_part)
+
+            # Send email
+            with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
+                server.starttls()
+                server.login(self.sender_email, self.sender_password)
+                server.sendmail(self.sender_email, self.recipient_email, msg.as_string())
+
+            print("\n" + "=" * 50)
+            print("🤖 DEEPSEEK AI ANALYSIS EMAIL SENT!")
+            print(f"   To: {self.recipient_email}")
+            print("=" * 50)
+            return True
+
+        except Exception as e:
+            print(f"\n❌ Failed to send DeepSeek email: {e}")
             return False
