@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  trading-bot:
+    build: .
+    container_name: trading-bot-deepseek
+    environment:
+      - BOT_EMAIL_SENDER=${BOT_EMAIL_SENDER}
+      - BOT_EMAIL_PASSWORD=${BOT_EMAIL_PASSWORD}
+      - BOT_EMAIL_RECIPIENT=${BOT_EMAIL_RECIPIENT}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+    env_file:
+      - .env
+    restart: unless-stopped
+
+    # For cron-like behavior, use ofelia (optional)
+    # Or run manually with: docker-compose run --rm trading-bot
+
+# Optional: Add ofelia for cron scheduling
+  ofelia:
+    image: mcuadros/ofelia:latest
+    depends_on:
+      - trading-bot
+    command: daemon --config=/etc/ofelia/config.ini
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./ofelia.ini:/etc/ofelia/config.ini
+    restart: unless-stopped

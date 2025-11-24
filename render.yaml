@@ -1,0 +1,16 @@
+services:
+  - type: cron
+    name: trading-bot-deepseek
+    env: python
+    schedule: "30 23 * * *"  # 06:30 Thailand time (with delay buffer)
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py deepseek
+    envVars:
+      - key: BOT_EMAIL_SENDER
+        sync: false
+      - key: BOT_EMAIL_PASSWORD
+        sync: false
+      - key: BOT_EMAIL_RECIPIENT
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false

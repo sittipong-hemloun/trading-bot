@@ -1,0 +1,22 @@
+app = "trading-bot-deepseek"
+primary_region = "sin"  # Singapore - ใกล้ไทย, ไม่ block Binance
+
+[build]
+
+[env]
+  PYTHON_VERSION = "3.13"
+
+[processes]
+  cron = "python main.py deepseek"
+
+# Cron schedule using fly-cron
+[[services]]
+  internal_port = 8080
+  protocol = "tcp"
+
+  [[services.http_checks]]
+    interval = "10s"
+    timeout = "2s"
+    grace_period = "5s"
+    method = "GET"
+    path = "/health"
