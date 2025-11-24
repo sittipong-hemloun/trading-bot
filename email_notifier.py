@@ -348,6 +348,7 @@ class EmailNotifier:
         # Signal percentages - Updated regex
         long_match = re.search(r"LONG Signals: (\d+) \(([0-9.]+)%\)", text)
         short_match = re.search(r"SHORT Signals: (\d+) \(([0-9.]+)%\)", text)
+        neutral_match = re.search(r"NEUTRAL Signals: (\d+) \(([0-9.]+)%\)", text)
 
         long_count = int(long_match.group(1)) if long_match else 0
         long_pct = float(long_match.group(2)) if long_match else 0
@@ -860,10 +861,16 @@ class EmailNotifier:
                 print("=" * 50)
                 return True
 
-        except Exception as e:
-            print(f"\n❌ Failed to send email: {e}")
-            print("💡 Make sure you have set up App Password for Gmail")
-            return False
+            except Exception as e:
+                print(f"\n❌ Attempt {attempt} failed: {e}")
+                if attempt < retries:
+                    print("   Retrying in 5 seconds...")
+                    time.sleep(5)
+                else:
+                    print("💡 Make sure you have set up App Password for Gmail")
+                    return False
+
+        return False
 
     def create_deepseek_html_email(self, analysis_result: dict, market_summary: dict):
         """สร้าง HTML email สำหรับ DeepSeek AI Analysis"""

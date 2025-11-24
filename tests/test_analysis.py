@@ -2,9 +2,6 @@
 Unit tests for trading/analysis.py
 """
 
-import pytest
-import pandas as pd
-import numpy as np
 
 from trading.analysis import (
     get_multi_indicator_confirmation,

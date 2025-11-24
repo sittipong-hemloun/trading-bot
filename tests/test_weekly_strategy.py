@@ -3,9 +3,6 @@ Unit tests for trading/weekly_strategy.py (SwingTradingStrategy)
 """
 
 import pytest
-import pandas as pd
-import numpy as np
-from unittest.mock import patch, MagicMock
 
 from trading.weekly_strategy import SwingTradingStrategy
 

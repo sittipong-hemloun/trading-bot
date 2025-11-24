@@ -2,9 +2,6 @@
 Unit tests for trading/risk.py
 """
 
-import pytest
-import pandas as pd
-import numpy as np
 
 from trading.risk import (
     calculate_risk_score,

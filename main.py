@@ -69,7 +69,7 @@ def run_monthly_analysis(symbol="BTCUSDT", balance=10000):
     # Capture output
     old_stdout = sys.stdout
     sys.stdout = buffer = io.StringIO()
-    success = monthly_trader.get_monthly_recommendation(balance=balance)
+    monthly_trader.get_monthly_recommendation(balance=balance)
     monthly_output = buffer.getvalue()
     sys.stdout = old_stdout
 
@@ -230,7 +230,7 @@ def main():
                     email_sender, email_password, email_recipient
                 )
 
-            if monthly_success and monthly_output:
+            if monthly_output:
                 print("\n📧 Sending MONTHLY analysis email...")
                 send_email_notification(
                     monthly_output, "monthly",
