@@ -9,7 +9,7 @@ import os
 import io
 
 from dotenv import load_dotenv
-from trading import WeeklyTradingStrategy, MonthlyTradingStrategy
+from trading import SwingTradingStrategy, MonthlyTradingStrategy
 from email_notifier import EmailNotifier
 
 
@@ -23,8 +23,8 @@ def print_banner():
 
 def print_usage():
     """แสดงวิธีใช้งาน"""
-    print("Usage: python main.py [weekly|monthly|both] [--no-email]")
-    print("  weekly  (w)  - Show weekly analysis only")
+    print("Usage: python main.py [swing|monthly|both] [--no-email]")
+    print("  swing   (s)  - Show swing trading analysis only (2-10 days)")
     print("  monthly (m)  - Show monthly analysis only")
     print("  both         - Show both analyses (default)")
     print("  --no-email   - Skip sending email notification")
@@ -35,23 +35,23 @@ def print_usage():
     print("  BOT_EMAIL_RECIPIENT - Recipient email address")
 
 
-def run_weekly_analysis(symbol="BTCUSDT", balance=10000):
-    """รันการวิเคราะห์ Weekly และ return output"""
+def run_swing_analysis(symbol="BTCUSDT", balance=10000):
+    """รันการวิเคราะห์ Swing Trading และ return output"""
     print("\n" + "━" * 100)
-    print("                         📅 WEEKLY ANALYSIS")
+    print("                         🔄 SWING TRADING ANALYSIS (2-10 Days)")
     print("━" * 100 + "\n")
 
-    weekly_trader = WeeklyTradingStrategy(symbol=symbol, leverage=5)
+    swing_trader = SwingTradingStrategy(symbol=symbol, leverage=5)
 
     # Capture output
     old_stdout = sys.stdout
     sys.stdout = buffer = io.StringIO()
-    weekly_trader.get_weekly_recommendation(balance=balance)
-    weekly_output = buffer.getvalue()
+    swing_trader.get_swing_recommendation(balance=balance)
+    swing_output = buffer.getvalue()
     sys.stdout = old_stdout
 
-    print(weekly_output)
-    return weekly_output
+    print(swing_output)
+    return swing_output
 
 
 def run_monthly_analysis(symbol="BTCUSDT", balance=10000):
@@ -120,7 +120,7 @@ def main():
     # Determine mode
     mode = "both"
     for arg in args:
-        if arg.lower() in ["weekly", "w", "monthly", "m", "both", "all"]:
+        if arg.lower() in ["swing", "s", "monthly", "m", "both", "all"]:
             mode = arg.lower()
             break
 
@@ -136,7 +136,7 @@ def main():
     print_banner()
 
     # Validate mode
-    if mode not in ["weekly", "w", "monthly", "m", "both", "all"]:
+    if mode not in ["swing", "s", "monthly", "m", "both", "all"]:
         print_usage()
         return
 
@@ -145,12 +145,12 @@ def main():
     email_configured = bool(email_sender and email_password)
 
     # Track outputs for separate emails
-    weekly_output = None
+    swing_output = None
     monthly_output = None
 
     # Run analyses
-    if mode in ["weekly", "w", "both", "all"]:
-        weekly_output = run_weekly_analysis(symbol, balance)
+    if mode in ["swing", "s", "both", "all"]:
+        swing_output = run_swing_analysis(symbol, balance)
 
     if mode in ["monthly", "m", "both", "all"]:
         monthly_output = run_monthly_analysis(symbol, balance)
@@ -159,10 +159,10 @@ def main():
     if send_email:
         if email_configured:
             # ส่งอีเมลแยก 2 ฉบับ
-            if weekly_output:
-                print("\n📧 Sending WEEKLY analysis email...")
+            if swing_output:
+                print("\n📧 Sending SWING TRADING analysis email...")
                 send_email_notification(
-                    weekly_output, "weekly",
+                    swing_output, "swing",
                     email_sender, email_password, email_recipient
                 )
 

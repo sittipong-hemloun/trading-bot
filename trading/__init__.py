@@ -3,7 +3,7 @@ Trading Module
 Complete trading strategy package with all components
 
 Usage:
-    from trading import WeeklyTradingStrategy, MonthlyTradingStrategy
+    from trading import SwingTradingStrategy, MonthlyTradingStrategy
 
     # Or import specific utilities
     from trading.indicators import calculate_indicators
@@ -17,7 +17,7 @@ Usage:
 from trading.base_strategy import BaseStrategy
 
 # Main strategy classes
-from trading.weekly_strategy import WeeklyTradingStrategy
+from trading.weekly_strategy import SwingTradingStrategy
 from trading.monthly_strategy import MonthlyTradingStrategy
 
 # Data fetching
@@ -52,7 +52,7 @@ __all__ = [
     # Base class
     "BaseStrategy",
     # Strategy classes
-    "WeeklyTradingStrategy",
+    "SwingTradingStrategy",
     "MonthlyTradingStrategy",
     # Data
     "fetch_binance_data",
