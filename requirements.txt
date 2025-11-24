@@ -4,3 +4,4 @@ pandas-ta
 python-dotenv
 dotenv
 numpy
+markdown
