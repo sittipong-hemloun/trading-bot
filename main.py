@@ -9,8 +9,9 @@ import os
 import io
 
 from dotenv import load_dotenv
-from strategies import WeeklyTradingStrategy, MonthlyTradingStrategy
+from trading import SwingTradingStrategy, MonthlyTradingStrategy
 from email_notifier import EmailNotifier
+from deepseek_analyzer import DeepSeekAnalyzer
 
 
 def print_banner():
@@ -23,39 +24,42 @@ def print_banner():
 
 def print_usage():
     """แสดงวิธีใช้งาน"""
-    print("Usage: python main.py [weekly|monthly|both] [--no-email]")
-    print("  weekly  (w)  - Show weekly analysis only")
-    print("  monthly (m)  - Show monthly analysis only")
-    print("  both         - Show both analyses (default)")
-    print("  --no-email   - Skip sending email notification")
+    print("Usage: python main.py [swing|monthly|both|deepseek] [--no-email] [--no-ai]")
+    print("  swing   (s)   - Show swing trading analysis only (2-10 days)")
+    print("  monthly (m)   - Show monthly analysis only")
+    print("  both          - Show both analyses (default)")
+    print("  deepseek (ai) - Run DeepSeek AI analysis only")
+    print("  --no-email    - Skip sending email notification")
+    print("  --no-ai       - Skip DeepSeek AI analysis email")
     print("")
     print("Email Configuration (Environment Variables):")
     print("  BOT_EMAIL_SENDER    - Gmail address for sending")
     print("  BOT_EMAIL_PASSWORD  - Gmail App Password")
     print("  BOT_EMAIL_RECIPIENT - Recipient email address")
+    print("  DEEPSEEK_API_KEY    - DeepSeek API key for AI analysis")
 
 
-def run_weekly_analysis(symbol="BTCUSDT", balance=10000):
-    """รันการวิเคราะห์ Weekly และ return output และ status"""
+def run_swing_analysis(symbol="BTCUSDT", balance=10000):
+    """รันการวิเคราะห์ Swing Trading และ return output + strategy object"""
     print("\n" + "━" * 100)
-    print("                         📅 WEEKLY ANALYSIS")
+    print("                         🔄 SWING TRADING ANALYSIS (2-10 Days)")
     print("━" * 100 + "\n")
 
-    weekly_trader = WeeklyTradingStrategy(symbol=symbol, leverage=5)
+    swing_trader = SwingTradingStrategy(symbol=symbol, leverage=5)
 
     # Capture output
     old_stdout = sys.stdout
     sys.stdout = buffer = io.StringIO()
-    success = weekly_trader.get_weekly_recommendation(balance=balance)
-    weekly_output = buffer.getvalue()
+    swing_trader.get_swing_recommendation(balance=balance)
+    swing_output = buffer.getvalue()
     sys.stdout = old_stdout
 
-    print(weekly_output)
-    return success, weekly_output
+    print(swing_output)
+    return swing_output, swing_trader
 
 
 def run_monthly_analysis(symbol="BTCUSDT", balance=10000):
-    """รันการวิเคราะห์ Monthly และ return output และ status"""
+    """รันการวิเคราะห์ Monthly และ return output + strategy object"""
     print("\n" + "━" * 100)
     print("                         🌙 MONTHLY ANALYSIS")
     print("━" * 100 + "\n")
@@ -70,7 +74,7 @@ def run_monthly_analysis(symbol="BTCUSDT", balance=10000):
     sys.stdout = old_stdout
 
     print(monthly_output)
-    return success, monthly_output
+    return monthly_output, monthly_trader
 
 
 def get_email_config():
@@ -89,6 +93,50 @@ def send_email_notification(output, mode, email_sender, email_password, email_re
         notifier.send_email(output, mode)
         return True
     return False
+
+
+def run_deepseek_analysis(email_sender, email_password, email_recipient, symbol="BTCUSDT"):
+    """รัน DeepSeek AI Analysis แบบ Standalone (ดึงข้อมูลจาก Binance โดยตรง)"""
+    deepseek = DeepSeekAnalyzer()
+
+    if not deepseek.is_configured():
+        print("\n" + "=" * 50)
+        print("🤖 DEEPSEEK AI NOT CONFIGURED")
+        print("   Set DEEPSEEK_API_KEY environment variable")
+        print("   to enable AI-powered analysis")
+        print("=" * 50)
+        return False
+
+    print("\n🤖 Running DeepSeek AI Standalone Analysis...")
+    print(f"   Symbol: {symbol}")
+
+    # Call standalone analysis (fetches from Binance directly)
+    analysis_result = deepseek.analyze_standalone(symbol)
+
+    if not analysis_result:
+        print("   ❌ DeepSeek analysis failed: No response")
+        return False
+
+    if not analysis_result.get("success"):
+        print(f"   ❌ DeepSeek analysis failed: {analysis_result.get('error', 'Unknown error')}")
+        return False
+
+    print("   ✅ Analysis complete!")
+
+    # Prepare market summary for email (from the fetched data)
+    market_data = analysis_result.get("market_data", {})
+    market_summary = {
+        "current_price": market_data.get("current_price", 0),
+        "swing": market_data.get("timeframes", {}).get("4h", {}),
+        "monthly": market_data.get("timeframes", {}).get("1w", {}),
+    }
+
+    # Send email
+    if email_sender and email_password:
+        notifier = EmailNotifier(email_sender, email_password, email_recipient)
+        return notifier.send_deepseek_email(analysis_result, market_summary)
+
+    return True
 
 
 def print_email_not_configured():
@@ -120,12 +168,15 @@ def main():
     # Determine mode
     mode = "both"
     for arg in args:
-        if arg.lower() in ["weekly", "w", "monthly", "m", "both", "all"]:
+        if arg.lower() in ["swing", "s", "monthly", "m", "both", "all", "deepseek", "ai"]:
             mode = arg.lower()
             break
 
     # Check for --no-email flag
     send_email = "--no-email" not in args
+
+    # Check for --no-ai flag
+    send_ai_email = "--no-ai" not in args
 
     # Check for help
     if "-h" in args or "--help" in args:
@@ -136,7 +187,7 @@ def main():
     print_banner()
 
     # Validate mode
-    if mode not in ["weekly", "w", "monthly", "m", "both", "all"]:
+    if mode not in ["swing", "s", "monthly", "m", "both", "all", "deepseek", "ai"]:
         print_usage()
         return
 
@@ -144,27 +195,38 @@ def main():
     email_sender, email_password, email_recipient = get_email_config()
     email_configured = bool(email_sender and email_password)
 
-    # Track outputs for separate emails
-    weekly_output = None
+    # Track outputs and strategy objects for separate emails
+    swing_output = None
     monthly_output = None
-    weekly_success = False
-    monthly_success = False
+    swing_trader = None
+    monthly_trader = None
 
     # Run analyses
-    if mode in ["weekly", "w", "both", "all"]:
-        weekly_success, weekly_output = run_weekly_analysis(symbol, balance)
+    if mode in ["swing", "s", "both", "all"]:
+        swing_output, swing_trader = run_swing_analysis(symbol, balance)
 
     if mode in ["monthly", "m", "both", "all"]:
-        monthly_success, monthly_output = run_monthly_analysis(symbol, balance)
+        monthly_output, monthly_trader = run_monthly_analysis(symbol, balance)
+
+    # If mode is deepseek/ai only, skip strategy analysis
+    if mode in ["deepseek", "ai"]:
+        print("\n🤖 Running DeepSeek AI Analysis Only...")
+        if email_configured and send_email:
+            run_deepseek_analysis(
+                email_sender, email_password, email_recipient, symbol
+            )
+        else:
+            print_email_not_configured()
+        return
 
     # Send separate emails
     if send_email:
         if email_configured:
             # ส่งอีเมลแยก 2 ฉบับ
-            if weekly_success and weekly_output:
-                print("\n📧 Sending WEEKLY analysis email...")
+            if swing_output:
+                print("\n📧 Sending SWING TRADING analysis email...")
                 send_email_notification(
-                    weekly_output, "weekly",
+                    swing_output, "swing",
                     email_sender, email_password, email_recipient
                 )
 
@@ -173,6 +235,13 @@ def main():
                 send_email_notification(
                     monthly_output, "monthly",
                     email_sender, email_password, email_recipient
+                )
+
+            # ส่งอีเมล DeepSeek AI Analysis (ฉบับที่ 3) - Standalone
+            if send_ai_email:
+                print("\n🤖 Sending DeepSeek AI analysis email...")
+                run_deepseek_analysis(
+                    email_sender, email_password, email_recipient, symbol
                 )
         else:
             print_email_not_configured()

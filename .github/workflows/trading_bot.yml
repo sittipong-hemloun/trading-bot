@@ -22,9 +22,10 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run trading bot
+      - name: Run DeepSeek AI analysis
         env:
           BOT_EMAIL_SENDER: ${{ secrets.BOT_EMAIL_SENDER }}
           BOT_EMAIL_PASSWORD: ${{ secrets.BOT_EMAIL_PASSWORD }}
           BOT_EMAIL_RECIPIENT: ${{ secrets.BOT_EMAIL_RECIPIENT }}
-        run: python main.py both
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: python main.py deepseek
